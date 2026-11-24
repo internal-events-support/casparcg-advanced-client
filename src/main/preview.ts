@@ -8,6 +8,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 
 export interface PreviewInfo { url: string; kind: 'video' | 'image' | 'audio'; fps: number; duration: number; width: number; height: number; codec: string; alpha: boolean; proxy: boolean }
+interface Job { j: { child: ChildProcess | null }; live: () => boolean; progress: (p: number) => void }
 interface Probe { codec: string; pix: string; width: number; height: number; fps: number; duration: number; audio: string; hasVideo: boolean }
 
 const VIDEO = ['.mp4', '.mov', '.mkv', '.mxf', '.avi', '.webm', '.m4v', '.mpg', '.mpeg', '.ts', '.wmv', '.flv', '.gif', '.m2ts', '.mts', '.vob', '.dv'];
@@ -18,19 +19,24 @@ const CACHE_MAX = 2e9;
 
 export class Preview {
   private files = new Map<string, string>();
-  private child: ChildProcess | null = null;
-  private job = 0;
+  /** One at a time for each screen. */
+  private jobs = new Map<string, { n: number; child: ChildProcess | null }>();
 
-  constructor(private cache: string, private ffmpeg: () => string, private progress: (p: number) => void) {
+  constructor(private cache: string, private ffmpeg: () => string) {
     fs.mkdirSync(cache, { recursive: true });
     // Unfinished copies from a crash.
-    for (const f of fs.readdirSync(cache)) if (f.endsWith('.part.mp4')) fs.rmSync(path.join(cache, f), { force: true });
+    for (const f of fs.readdirSync(cache)) if (/\.part\.(mp4|png)$/.test(f)) fs.rmSync(path.join(cache, f), { force: true });
   }
 
-  cancel(): void {
-    this.job++;
-    this.child?.kill();
-    this.child = null;
+  private jobOf(who: string) { if (!this.jobs.has(who)) this.jobs.set(who, { n: 0, child: null }); return this.jobs.get(who)!; }
+  /** Stop what a screen was opening, or everything. */
+  cancel(who?: string): void {
+    for (const [k, j] of this.jobs) {
+      if (who !== undefined && k !== who) continue;
+      j.n++;
+      j.child?.kill();
+      j.child = null;
+    }
   }
 
   /** Find a media name ("FOLDER/CLIP", no extension, any case) below a folder. */
@@ -53,11 +59,11 @@ export class Preview {
     return path.join(dir, files[0]);
   }
 
-  private run(exe: string, args: string[], onErr?: (s: string) => void, track = false): Promise<string> {
+  private run(exe: string, args: string[], onErr?: (s: string) => void, track?: { child: ChildProcess | null }): Promise<string> {
     return new Promise((ok, bad) => {
       const c = spawn(exe, args, { windowsHide: true });
       if (track) {
-        this.child = c;
+        track.child = c;
         // A server on this PC comes first: never let making a preview copy disturb what is on air.
         try { if (c.pid) os.setPriority(c.pid, os.constants.priority.PRIORITY_LOW); } catch { /* it may have finished already */ }
       }
@@ -67,7 +73,7 @@ export class Preview {
       c.stderr.on('data', (d: Buffer) => { err = (err + d).slice(-4000); onErr?.(String(d)); });
       c.on('error', () => bad(new Error('ffmpeg was not found. Set it in Settings to preview this clip')));
       c.on('close', (code) => {
-        if (this.child === c) this.child = null;
+        if (track?.child === c) track.child = null;
         if (code === 0) ok(out);
         else bad(new Error(err.trim().split('\n').pop() || 'The clip could not be read'));
       });
@@ -84,13 +90,15 @@ export class Preview {
     return { codec: String(v?.codec_name ?? a?.codec_name ?? ''), pix: String(v?.pix_fmt ?? ''), width: Number(v?.width) || 0, height: Number(v?.height) || 0, fps: d ? n / d : 0, duration: Number(j.format.duration) || 0, audio: String(a?.codec_name ?? ''), hasVideo: !!v };
   }
 
-  async open(folder: string, name: string): Promise<PreviewInfo> {
-    this.cancel();
-    const job = this.job;
+  async open(who: string, folder: string, name: string, progress: (p: number) => void): Promise<PreviewInfo> {
+    this.cancel(who);
+    const j = this.jobOf(who);
+    const n = j.n;
+    const job: Job = { j, live: () => j.n === n, progress };
     const file = this.find(folder, name);
     const ext = path.extname(file).toLowerCase();
     const p = await this.probe(file);
-    if (job !== this.job) throw new Error('');
+    if (!job.live()) throw new Error('');
     const alpha = /^(yuva|rgba|bgra|argb|abgr|gbrap|ya)/.test(p.pix);
     const base = { fps: p.fps, duration: p.duration, width: p.width, height: p.height, codec: p.codec, alpha };
     if (IMAGE.includes(ext)) {
@@ -105,7 +113,7 @@ export class Preview {
     return { ...base, url: this.share(direct ? file : await this.proxy(file, p, 'video', alpha, job)), kind: 'video', proxy: !direct };
   }
 
-  private async proxy(file: string, p: Probe, kind: 'video' | 'image' | 'audio', alpha: boolean, job: number): Promise<string> {
+  private async proxy(file: string, p: Probe, kind: 'video' | 'image' | 'audio', alpha: boolean, job: Job): Promise<string> {
     const st = fs.statSync(file);
     const id = crypto.createHash('sha1').update(`${file}|${st.size}|${st.mtimeMs}|2`).digest('hex').slice(0, 24);
     const out = path.join(this.cache, id + (kind === 'image' ? '.png' : '.mp4'));
@@ -113,26 +121,27 @@ export class Preview {
       fs.utimesSync(out, new Date(), new Date());
       return out;
     }
-    const part = path.join(this.cache, `${id}.part${kind === 'image' ? '.png' : '.mp4'}`);
+    const part = path.join(this.cache, `${id}.${crypto.randomBytes(4).toString('hex')}.part${kind === 'image' ? '.png' : '.mp4'}`);
     const rate = p.fps > 0 && p.fps <= 60 ? p.fps : 25;
     // Transparent clips are shown over a dark grey so light and dark graphics both read.
     const video = alpha
       ? ['-filter_complex', `[0:v]scale=640:-2[v];color=0x3a3a3a:s=${640}x${Math.max(2, Math.round((640 * (p.height || 360)) / (p.width || 640) / 2) * 2)}:r=${rate}[b];[b][v]overlay=shortest=1,format=yuv420p[o]`, '-map', '[o]', '-map', '0:a:0?']
       : ['-vf', 'scale=640:-2,format=yuv420p', '-map', '0:v:0', '-map', '0:a:0?'];
     const args = kind === 'image' ? ['-frames:v', '1'] : kind === 'audio' ? ['-vn', '-c:a', 'aac', '-ac', '2', '-movflags', '+faststart'] : [...video, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '24', '-g', String(Math.max(1, Math.round(rate / 4))), '-c:a', 'aac', '-ac', '2', '-movflags', '+faststart'];
-    this.progress(0);
+    job.progress(0);
     try {
       await this.run(this.ffmpeg(), ['-v', 'error', '-nostdin', '-y', '-progress', 'pipe:2', '-i', file, ...args, part], (s) => {
         const m = /out_time_us=(\d+)/.exec(s);
-        if (m && p.duration && job === this.job) this.progress(Math.min(0.99, Number(m[1]) / 1e6 / p.duration));
-      }, true);
-      if (job !== this.job) throw new Error('');
-      fs.renameSync(part, out);
+        if (m && p.duration && job.live()) job.progress(Math.min(0.99, Number(m[1]) / 1e6 / p.duration));
+      }, job.j);
+      if (!job.live()) throw new Error('');
+      if (fs.existsSync(out)) fs.rmSync(part, { force: true }); // another screen made it meanwhile
+      else fs.renameSync(part, out);
     } catch (e) {
       fs.rmSync(part, { force: true });
-      throw job === this.job ? e : new Error('');
+      throw job.live() ? e : new Error('');
     } finally {
-      if (job === this.job) this.progress(-1);
+      if (job.live()) job.progress(-1);
     }
     this.trim();
     return out;
@@ -151,17 +160,17 @@ export class Preview {
   private share(file: string): string {
     const token = crypto.randomBytes(12).toString('hex');
     this.files.set(token, file);
-    if (this.files.size > 50) this.files.delete(this.files.keys().next().value!);
+    if (this.files.size > 200) this.files.delete(this.files.keys().next().value!);
     return `vtmedia://clip/${token}`;
   }
 
-  /** vtmedia:// handler with byte ranges (needed for scrubbing). Only files handed out by open() can be read. */
-  serve(req: Request): Response {
-    const file = this.files.get(new URL(req.url).pathname.slice(1));
+  /** A file with byte ranges (needed for scrubbing). Only files handed out by open() can be read. */
+  serve(token: string, range: string | undefined): Response {
+    const file = this.files.get(token);
     if (!file || !fs.existsSync(file)) return new Response('Not found', { status: 404 });
     const size = fs.statSync(file).size;
     const type = MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
-    const m = /bytes=(\d*)-(\d*)/.exec(req.headers.get('range') ?? '');
+    const m = /bytes=(\d*)-(\d*)/.exec(range ?? '');
     let a = 0;
     let b = size - 1;
     if (m) {

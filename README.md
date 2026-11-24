@@ -10,7 +10,7 @@ A CasparCG client with playlists, takes between any two channels, and local clip
 - **Missing clips** are marked on their rows. The media list is checked every 8 seconds, so a renamed file is noticed by itself and its new name suggested (same size and length = same file). Relinking keeps everything else about the entry.
 - **Copy template** (Ctrl+Shift+C) and apply (Ctrl+Shift+V) copy an entry's settings onto others, except the clip, label, remote ID and story ID.
 - **Shell Command** items run programs on this PC. Off until allowed in Settings > Rundown.
-- **Web interface** (port 8126) controls the open rundowns and channels from a phone or another computer. It needs the access code from Settings > Web Interface, and is limited to this computer until other devices are allowed there.
+- **Web interface** (port 8126) is the whole client in a browser, on a computer, tablet or phone, sharing the same open rundowns. Edits made on several screens at once are merged. It needs the access code from Settings > Web Interface, and is limited to this computer until other devices are allowed there. Another device cannot write Shell Commands, change settings that name programs or folders on the show PC, or change the web interface itself.
 - **Remote control** over HTTP (127.0.0.1:8125) and OSC (3250, same addresses as the original client), plus the countdown feed for monitor overlays (8123).
 
 ## Remote control
@@ -41,6 +41,7 @@ The exes are not code-signed, so Windows SmartScreen warns the first time.
 
     node test/unit.mjs                       # rundown files and every tool's commands
     python test/hidden.py 300 node test/e2e.mjs <work dir> <media dir> <vt config> <log>   # the real app on an isolated server
+    python test/hidden.py 300 node test/web.mjs <work dir> <chrome.exe> <rundown.xml>      # the client in browsers next to the app
 
 ## Layout
 
@@ -50,7 +51,8 @@ The exes are not code-signed, so Windows SmartScreen warns the first time.
     src/main/preview.ts   local clip preview
     src/main/commands.ts  the AMCP each tool sends
     src/main/api.ts       HTTP, OSC and countdown services
-    src/main/web.ts       web interface server; src/web/ is its page
+    src/main/web.ts       web interface server; src/web/ runs the client in a browser
+    src/shared/merge.ts   two screens editing one rundown
     src/shared/relink.ts  missing clips and finding their new names
     src/shared/tools.ts   every tool and its properties (the inspector is built from this)
     src/ui/               interface, built from GMeet ISO's kit and tokens

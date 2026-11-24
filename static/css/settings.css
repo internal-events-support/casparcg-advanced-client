@@ -114,5 +114,5 @@ body.settings { background: var(--window-bg); }
 .s-color.na { opacity: .45; }
 
 
-.s-code { font-size: 17px; letter-spacing: .14em; font-variant-numeric: tabular-nums; user-select: text; }
+.s-code { font-variant-numeric: tabular-nums; user-select: text; }
 .s-mono div { user-select: text; }

@@ -1,13 +1,13 @@
 // App shell: top bar, tabs, status bar and keyboard. Edit has the library, preview and inspector, Show has the preview and details; the other tabs are full width.
-import type { Action, AppState, Doc, Library, LogLine, Settings } from '../shared/types';
+import type { Action, AppState, DocPut, Library, LogLine, Settings } from '../shared/types';
 import { buildInfo } from './info';
 import { buildInspector } from './inspector';
-import { button, confirmSheet, h, icon, popover, segmented, textField, toggle } from './kit';
+import { button, confirmSheet, h, icon, iconButton, popover, segmented, textField, toggle } from './kit';
 import { buildLibrary } from './library';
 import { buildChannels } from './channels';
-import { buildPreview, previewMode, previewPause, previewToggle } from './preview';
+import { buildPreview, previewMode, previewKey, previewPause, previewToggle } from './preview';
 import { buildRundown, closeDoc, setCollapsed } from './rundown';
-import { activate, applyTemplate, call, copy, copyTemplate, doc, duplicate, emit, execute, homeDevice, moveSelection, newDoc, on, openFiles, paste, removeSelected, save, store, sync, toast, undo, ungroup, visible, vt, wrap } from './store';
+import { activate, applyTemplate, call, copy, copyTemplate, doc, duplicate, emit, execute, fromOther, gotDocs, homeDevice, moveSelection, newDoc, on, openFiles, paste, touch, removeSelected, save, store, sync, toast, undo, ungroup, visible, vt, wrap } from './store';
 
 type Tab = 'edit' | 'show' | 'channels' | 'activity';
 let tab: Tab = 'edit';
@@ -16,6 +16,12 @@ const hosts = new Map<Tab, HTMLElement>();
 let inspector: HTMLElement;
 let info: HTMLElement;
 let nav: ReturnType<typeof segmented>;
+/** On a small screen the columns take turns. */
+let panels: ReturnType<typeof segmented>;
+function showPanel(p: string): void {
+  body.dataset.panel = p;
+  panels.set(p);
+}
 function showTab(t: Tab): void {
   tab = t;
   nav.set(t);
@@ -24,6 +30,9 @@ function showTab(t: Tab): void {
   body.classList.toggle('wide', t !== 'edit' && t !== 'show');
   inspector.hidden = t !== 'edit';
   info.hidden = t !== 'show';
+  panels.el.parentElement!.hidden = t !== 'edit' && t !== 'show';
+  panels.el.querySelector<HTMLElement>('button')!.hidden = t !== 'edit'; // the library is for editing
+  if (t !== 'edit' && body.dataset.panel === 'library') showPanel('rundown');
   previewPause();
   if (t === 'edit' || t === 'show') previewMode(t === 'show');
   try { if (t === 'edit' || t === 'show') localStorage.setItem('vt.tab', t); } catch { /* not kept */ }
@@ -33,9 +42,20 @@ function showTab(t: Tab): void {
 // ---- top bar ----------------------------------------------------------------------------------------------
 function topBar(): HTMLElement {
   nav = segmented([{ value: 'edit', label: 'Edit' }, { value: 'show', label: 'Show' }, { value: 'channels', label: 'Channels' }, { value: 'activity', label: 'Activity' }], tab, (v) => showTab(v as Tab));
-  const settings = h('button.btn.pill', icon('gear'), 'Settings') as HTMLButtonElement;
-  settings.addEventListener('click', () => void call('openSettings'));
+  const settings = h('button.btn.pill.settings-btn', icon('gear'), h('span', 'Settings')) as HTMLButtonElement;
+  settings.addEventListener('click', openSettings);
   return h('header.topbar', h('div.left', h('span.app-title', 'CasparCG Client')), h('div.center', nav.el), h('div.right', settings));
+}
+
+/** In a browser the settings open over the page; in the app they have their own window. */
+let frame: HTMLElement | null = null;
+function openSettings(): void {
+  if (!vt.web) return void call('openSettings');
+  frame?.remove();
+  const close = () => { frame?.remove(); frame = null; };
+  frame = h('div.sheet-layer.web-settings', h('div', iconButton('x', close, 'Close', 'plain'), h('iframe', { src: '/settings', title: 'Settings' })));
+  frame.addEventListener('mousedown', (e) => { if (e.target === frame) close(); });
+  document.body.append(frame);
 }
 
 // ---- activity ---------------------------------------------------------------------------------------------
@@ -128,7 +148,7 @@ function keys(e: KeyboardEvent): void {
   if (ctrl && k === 'n') { done(); newDoc(); return; }
   if (ctrl && k === 'w') { done(); const d = doc(); if (d) void closeDoc(d); return; }
   if (ctrl && k === 'f') { done(); (document.querySelector('#lib-search') as HTMLInputElement)?.focus(); return; }
-  if (ctrl && k === ',') { done(); void call('openSettings'); return; }
+  if (ctrl && k === ',') { done(); openSettings(); return; }
   if (ctrl && e.key === 'Tab') {
     done();
     const n = store.docs.findIndex((d) => d.id === store.active);
@@ -141,6 +161,8 @@ function keys(e: KeyboardEvent): void {
   if (ctrl && k === 'y') { done(); undo(true); return; }
   if (e.key === ' ') { done(); if (!e.repeat && (editing || tab === 'show')) previewToggle(); return; }
   if (tab === 'activity' || tab === 'channels') return;
+  if (editing && !e.altKey && !ctrl && (k === 'i' || k === 'o')) { done(); if (!e.repeat) previewKey(e.shiftKey ? (k === 'i' ? 'goIn' : 'goOut') : k === 'i' ? 'in' : 'out'); return; }
+  if (editing && !e.altKey && !ctrl && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { done(); previewKey(`${e.key === 'ArrowLeft' ? 'back' : 'fwd'}${e.shiftKey ? '10' : ''}`); return; }
   if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { done(); void act(e.key === 'ArrowLeft' ? 'back' : 'forward'); return; }
   if (ctrl && e.shiftKey && k === 'c') { done(); copyTemplate(); return; }
   if (ctrl && e.shiftKey && k === 'v') { done(); applyTemplate(); return; }
@@ -163,11 +185,11 @@ const REMOTE: Record<string, Action> = { stop: 'stop', play: 'play', playnow: 'p
 
 // ---- start ---------------------------------------------------------------------------------------------------------
 async function start(): Promise<void> {
-  const r = await call<{ settings: Settings; docs: Doc[]; library: Record<string, Library>; logs: LogLine[]; state: AppState; version: string }>('init');
+  const r = await call<{ settings: Settings; docs: DocPut[]; library: Record<string, Library>; logs: LogLine[]; state: AppState; version: string }>('init');
   if (!r) return;
-  Object.assign(store, { settings: r.settings, docs: r.docs, library: r.library, logs: r.logs, state: r.state, version: r.version });
-  if (!store.docs.length) newDoc();
-  else activate(store.docs[0].id);
+  Object.assign(store, { settings: r.settings, library: r.library, logs: r.logs, state: r.state, version: r.version });
+  gotDocs(r.docs);
+  if (!store.active || !store.sel.size) activate(store.docs[0].id);
 
   const root = document.getElementById('app')!;
   const top = topBar();
@@ -178,12 +200,18 @@ async function start(): Promise<void> {
     tabhost.append(el);
   }
   body = h('div.vt-body', buildLibrary(), h('div.vt-center', tabhost), h('div.vt-right', buildPreview(), (inspector = buildInspector()), (info = buildInfo())));
-  root.append(top, body, bottomBar());
+  panels = segmented([{ value: 'library', label: 'Library' }, { value: 'rundown', label: 'Rundown' }, { value: 'details', label: 'Details' }], 'rundown', showPanel);
+  showPanel('rundown');
+  root.append(top, body, h('div.panels', panels.el), bottomBar());
+  document.body.classList.toggle('touch', touch);
   let first: Tab = 'edit';
   try { if (localStorage.getItem('vt.tab') === 'show') first = 'show'; } catch { /* start in Edit */ }
   showTab(first);
 
   vt.on('state', ((s: AppState) => { store.state = s; emit('state'); }) as never);
+  vt.on('docs', ((n: { put: DocPut[]; drop: string[] }) => fromOther(n.put, n.drop)) as never);
+  // A browser that was cut off: take what happened meanwhile and send what was done here.
+  vt.on('back', (() => void call<{ settings: Settings; docs: DocPut[]; library: Record<string, Library> }>('init').then((x) => { if (!x) return; Object.assign(store, { settings: x.settings, library: x.library }); emit('settings'); emit('library'); gotDocs(x.docs); })) as never);
   vt.on('library', ((n: string, l: Library) => { store.library = { ...store.library, [n]: l }; emit('library'); }) as never);
   vt.on('settings', ((s: Settings) => { store.settings = s; emit('settings'); }) as never);
   vt.on('toast', ((t: string, k: 'ok' | 'bad') => toast(t, k)) as never);

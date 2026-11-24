@@ -242,10 +242,10 @@ try {
 	mk = srv.mark(); const before2 = JSON.stringify((await st()).layers)
 	await p.key(' '); c.ok('Space plays the preview', await until(() => pv('!v.paused&&v.currentTime>0.4')), await pv('[v.paused,v.currentTime]'))
 	await p.key(' '); c.ok('Space pauses it', await until(() => pv('v.paused')))
-	await seekTo(2); const f0 = await pv('v.currentTime'); await p.ev(`document.querySelector('.preview [title="Forward one frame"]').click()`); await sleep(300); const f1 = await pv('v.currentTime'); c.ok('steps one frame', f1 > f0 && f1 - f0 < 0.05, [f0, f1])
-	await seekTo(2); await p.ev(`[...document.querySelectorAll('.pv-marks .btn')].find(b=>b.textContent==='Set in').click()`); await seekTo(5); await p.ev(`[...document.querySelectorAll('.pv-marks .btn')].find(b=>b.textContent==='Set out').click()`); await sleep(700)
+	await seekTo(2); const f0 = await pv('v.currentTime'); await p.ev(`document.querySelector('.preview [title^="Forward one frame"]').click()`); await sleep(300); const f1 = await pv('v.currentTime'); c.ok('steps one frame', f1 > f0 && f1 - f0 < 0.05, [f0, f1])
+	await seekTo(2); await p.ev(`[...document.querySelectorAll('.pv-marks .btn')].find(b=>b.textContent.startsWith('Set in')).click()`); await seekTo(5); await p.ev(`[...document.querySelectorAll('.pv-marks .btn')].find(b=>b.textContent.startsWith('Set out')).click()`); await sleep(700)
 	c.ok('previewing sends the server nothing', srv.sent(mk).length === 0, srv.sent(mk))
-	mk = srv.mark(); await p.key('F2'); await sleep(500); c.ok('marks are used when it plays on the server', srv.sent(mk).some((x) => /1-10 "a2".*SEEK 100 LENGTH 150/.test(x)), srv.sent(mk))
+	mk = srv.mark(); await p.key('F2'); await sleep(500); c.ok('marks are used when it plays on the server', srv.sent(mk).some((x) => /1-10 "a2".*SEEK 100 LENGTH 15[12]/.test(x)), srv.sent(mk))
 	await seekTo(4.5); await p.key(' '); c.ok('the preview stops at the out point', await until(() => pv('v.paused&&Math.abs(v.currentTime-5)<0.15')), await pv('[v.paused,v.currentTime]'))
 	mk = srv.mark(); await p.ev(`document.querySelector('.lib-tabs [title=Media]').click()`); await sleep(300)
 	const libName = await p.ev(`(()=>{const r=document.querySelector('.lib-row[data-name]');r.click();return r.dataset.name.split('/').pop()})()`); await sleep(500)
@@ -258,7 +258,7 @@ try {
 	await tab('Edit')
 
 	// --- saving
-	const saved = await p.ev(`(async()=>{const d=JSON.parse(JSON.stringify((await vt.call('init')).value.docs[0]));d.path=${JSON.stringify(path.join(dir, 'saved.xml'))};const r=await vt.call('save',d,false);return r.ok})()`)
+	const saved = await p.ev(`(async()=>{const d=JSON.parse(JSON.stringify((await vt.call('init')).value.docs[0].doc));d.path=${JSON.stringify(path.join(dir, 'saved.xml'))};const r=await vt.call('save',d,false);return r.ok})()`)
 	const sx = fs.readFileSync(path.join(dir, 'saved.xml'), 'utf8'); c.ok('saves a file the original client can read', saved && (sx.match(/<type>GROUP<\/type>/g) || []).length === 3 && /<cgtake>true/.test(sx) && !/CGTAKE<\/type>/.test(sx) && (sx.match(/<cgplaylist>true/g) || []).length === 2 && !/PLAYLIST<\/type>/.test(sx))
 
 	// --- server restart

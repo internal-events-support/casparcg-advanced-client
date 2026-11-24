@@ -57,7 +57,7 @@ export async function startApp(userData, settings, port = 9333) {
 	return { proc, page, exited, output: () => out, kill: async () => { proc.kill(); await Promise.race([exited, sleep(4000)]) } }
 }
 
-async function connect(url) {
+export async function connect(url) {
 	const ws = new WebSocket(url)
 	await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = bad })
 	let n = 0

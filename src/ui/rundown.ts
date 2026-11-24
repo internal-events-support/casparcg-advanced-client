@@ -1,10 +1,10 @@
 // The rundown, in two forms: Edit (change the show) and Show (run it, nothing can be changed).
-import { findItem, isContainer, isPlaylist, newItem, tool, walk } from '../shared/tools';
+import { findItem, isContainer, isPlaylist, tool } from '../shared/tools';
 import { stem, type Action, type Doc, type Item } from '../shared/types';
 import { button, confirmSheet, h, icon, iconButton, menu, promptSheet, type MenuItem } from './kit';
 import { DRAG, dragItems } from './library';
 import { missing, missingItems, relinkSheet } from './relinkui';
-import { activate, applyTemplate, call, canHold, clock, copy, copyTemplate, doc, duplicate, hasTemplate, edit, emit, execute, homeDevice, insert, itemSeconds, moveItems, mutate, newDoc, on, openFiles, openPath, paste, removeSelected, save, select, selected, selectedTop, store, toast, undo, ungroup, visible, wrap, type Spot } from './store';
+import { activate, applyTemplate, call, canHold, clock, copy, copyTemplate, doc, duplicate, hasTemplate, edit, emit, execute, homeDevice, insert, itemSeconds, moveItems, mutate, newDoc, on, openFiles, openPath, paste, removeSelected, save, select, selected, selectedTop, store, toast, ungroup, visible, touch, vt, download, wrap, type Spot } from './store';
 
 const MOVE = 'application/x-vt-move';
 export const COLORS = ['', '#8c3a3a', '#a0522d', '#b8922f', '#6b8e23', '#2e8b57', '#2f7f8f', '#4673c3', '#6a4fa3', '#a0478f', '#555555'];
@@ -31,7 +31,6 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
   const tabs = h('div.rd-tabs');
   const list = h('div.rd-list', { tabIndex: 0 });
   const root = h(`section.rundown.${mode}`);
-  const count = h('span.caption.rd-count');
 
   const renderTabs = () => {
     tabs.textContent = '';
@@ -64,20 +63,10 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
   const fileBtn = button(h('span.dd', 'File', icon('chevronDown')), () => menu(fileBtn, [
     { label: 'New', onClick: () => newDoc() }, { label: 'Open…', onClick: () => void openFiles() },
     ...store.settings.recent.slice(0, 6).map((f): MenuItem => ({ label: f.split(/[\\/]/).pop()!, icon: 'doc', onClick: () => void openPath(f) })), null,
-    { label: 'Save', onClick: () => void save() }, { label: 'Save as…', onClick: () => void save(true) },
-  ]), 'sm flat');
-  const addBtn = button(h('span.dd', icon('plus'), 'Add', icon('chevronDown')), () => menu(addBtn, [
-    { label: 'Playlist', icon: 'playlist', onClick: () => insert([newItem('PLAYLIST', { device: homeDevice() })]) },
-    { label: 'Group', icon: 'folder', onClick: () => insert([newItem('GROUP')]) },
-    { label: 'Channel take', icon: 'cut', onClick: () => insert([newItem('CGTAKE', { device: homeDevice() })]) },
-    { label: 'Shell command', icon: 'terminal', onClick: () => insert([newItem('SHELL')]) },
-    { label: 'Separator', icon: 'line', onClick: () => insert([newItem('SEPARATOR')]) }, null,
-    { label: 'Make playlist from selection', icon: 'playlist', onClick: () => wrap('PLAYLIST') },
-    { label: 'Group selection (Ctrl+G)', icon: 'folder', onClick: () => wrap('GROUP') },
-    { label: 'Ungroup', onClick: () => ungroup() },
+    { label: 'Save', onClick: () => void save() }, { label: 'Save as…', onClick: () => void save(true) }, ...(vt.web ? [{ label: 'Download', onClick: () => void download() }] : []),
   ]), 'sm flat');
   const miss = button('', () => { if (show) toEdit(); void relinkSheet(missingItems()); }, 'sm miss', 'Find what these clips are called now');
-  const head = h('div.rd-head', tabs, h('span.spacer'), miss, count, ...(show ? [] : [h('span.rd-pair', iconButton('undo', () => undo(), 'Undo (Ctrl+Z)', 'plain'), iconButton('redo', () => undo(true), 'Redo (Ctrl+Y)', 'plain')), addBtn, fileBtn]));
+  const head = h('div.rd-head', tabs, h('span.spacer'), miss, show ? null : fileBtn);
 
   // The buttons act on the selected entry, so say which one that is and only offer what it can do.
   const nowIcon = h('span.rd-now-ico');
@@ -251,7 +240,16 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
     el.className += ` t-${i.type.toLowerCase()}${parent ? ' child' : ''}${box ? ' box' : ''}`;
     if (gone) el.classList.add('gone');
     el.querySelector('[data-miss]')?.addEventListener('click', (e) => { e.stopPropagation(); if (show) toEdit(); void relinkSheet([i]); });
-    el.draggable = !show;
+    el.draggable = !show && !touch;
+    if (touch && !(show && i.type === 'SEPARATOR')) {
+      const dots = iconButton('ellipsis', (e) => { e.stopPropagation(); if (!store.sel.has(i.id)) select(i.id); context(e, i); }, 'More', 'plain rd-more');
+      dots.addEventListener('mousedown', (e) => e.stopPropagation());
+      el.insertBefore(dots, el.querySelector('.rd-prog'));
+      // Tapping the icon adds to the selection.
+      const ic = el.querySelector<HTMLElement>('.rd-ico')!;
+      ic.addEventListener('mousedown', (e) => { e.stopPropagation(); select(i.id, 'toggle'); });
+      ic.addEventListener('click', (e) => e.stopPropagation());
+    }
     el.addEventListener('mousedown', (e) => {
       if (e.button === 2 && store.sel.has(i.id)) return;
       if (e.button === 0 && store.sel.has(i.id) && !e.ctrlKey && !e.shiftKey && store.sel.size > 1) return; // may be the start of a drag
@@ -282,7 +280,11 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
         { label: 'Mark as used', onClick: () => void call('used', ids, true) }, { label: 'Mark as unused', onClick: () => void call('used', ids, false) }]);
       return;
     }
+    const at = (findItem(doc()?.items ?? [], i.id)?.parent?.items ?? doc()?.items ?? []).indexOf(i);
+    const inside = findItem(doc()?.items ?? [], i.id)?.parent?.id ?? null;
+    const last = (findItem(doc()?.items ?? [], i.id)?.parent?.items ?? doc()?.items ?? []).length - 1;
     menu({ x: e.clientX, y: e.clientY }, [
+      ...(touch && one ? [{ label: 'Move up', disabled: at <= 0, onClick: () => moveItems([i.id], { parent: inside, index: at - 1 }) }, { label: 'Move down', disabled: at >= last, onClick: () => moveItems([i.id], { parent: inside, index: at + 2 }) }, null] : []),
       act('Play', 'play', 'play'), act('Load', 'load', 'cue'), act('Stop', 'stop', 'stop'),
       ...(isPlaylist(i) ? [act('Previous clip', 'prev', 'prev'), act('Next clip', 'next', 'next')] : []), null,
       { label: 'Copy', icon: 'copy', onClick: () => copy() }, { label: 'Cut', onClick: () => copy(true) }, { label: 'Paste', onClick: () => paste() }, { label: 'Duplicate', onClick: () => duplicate() }, null,
@@ -313,9 +315,6 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
       if (isContainer(item) && item.expanded !== false && !item.items?.length) list.append(h('div.rd-hint', { dataset: { into: item.id } }, show ? 'Empty' : isPlaylist(item) ? 'Drop videos here' : 'Drop items here'));
     }
     if (!d?.items.length) list.append(show ? h('div.rd-empty', h('div', icon('playlist')), 'Nothing in this rundown yet', h('span.caption', 'Add entries in the Edit tab')) : h('div.rd-empty', h('div', icon('playlist')), 'Drag media and tools here', h('span.caption', 'or double-click them in the library')));
-    let n = 0;
-    walk(d?.items ?? [], () => n++);
-    count.textContent = n ? `${n} items` : '';
     const lost = missingItems().length;
     miss.hidden = !lost;
     miss.replaceChildren(icon('warn'), `${lost} missing`);

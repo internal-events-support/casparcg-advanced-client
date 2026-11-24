@@ -39,6 +39,10 @@ export interface Doc {
   items: Item[];
 }
 
+/** A rundown and its change number. */
+export interface DocPut { doc: Doc; rev: number }
+export interface DocSync { revs: Record<string, number>; conflicts: DocPut[] }
+
 export interface DeviceCfg {
   name: string;
   host: string;

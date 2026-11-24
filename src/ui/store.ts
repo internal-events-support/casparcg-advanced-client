@@ -1,9 +1,13 @@
 // Renderer state: documents, selection, undo, live state, and calls to the main process.
+import { keepFolds, mergeDoc, mergeItems } from '../shared/merge';
 import { cloneItem, findItem, isContainer, isPlaylist, newItem, tool, walk } from '../shared/tools';
-import { DEFAULT_SETTINGS, uid, type Action, type AppState, type Doc, type Item, type Library, type LogLine, type MediaEntry, type Settings } from '../shared/types';
+import { openSheet, saveSheet, type Folder } from './files';
+import { DEFAULT_SETTINGS, uid, type Action, type AppState, type Doc, type DocPut, type DocSync, type Item, type Library, type LogLine, type MediaEntry, type Settings } from '../shared/types';
 
-interface Bridge { call(name: string, ...a: unknown[]): Promise<{ ok: boolean; value?: unknown; error?: string }>; on(name: string, fn: (...a: never[]) => void): void }
+interface Bridge { call(name: string, ...a: unknown[]): Promise<{ ok: boolean; value?: unknown; error?: string; lost?: boolean }>; on(name: string, fn: (...a: never[]) => void): void; web?: { local: boolean } }
 export const vt = (window as unknown as { vt: Bridge }).vt;
+/** Fingers rather than a mouse: no right click, no dragging between lists, bigger targets. */
+export const touch = !!vt.web && matchMedia('(pointer: coarse)').matches;
 
 // ---- events ------------------------------------------------------------------------------------------
 type Ev = 'doc' | 'select' | 'state' | 'library' | 'settings' | 'log' | 'tabs' | 'tab';
@@ -51,16 +55,112 @@ export async function call<T>(name: string, ...args: unknown[]): Promise<T | und
 /** The server used when nothing else is chosen: the first one in Settings. */
 export const homeDevice = () => store.settings.devices[0]?.name ?? '';
 export const doc = (): Doc | undefined => store.docs.find((d) => d.id === store.active);
-interface Undo { past: string[]; future: string[] }
+/** What another screen changed after a step was kept, so undoing the step leaves that alone. */
+type Theirs = { base: Item[]; next: Item[] };
+interface Step { json: string; theirs: Theirs[] }
+interface Undo { past: Step[]; future: Step[] }
 const undos = new Map<string, Undo>();
 const undoOf = (id: string) => { if (!undos.has(id)) undos.set(id, { past: [], future: [] }); return undos.get(id)!; };
 
-let pending: Promise<unknown> = Promise.resolve();
-/** Send documents to the main process, which is what actually plays them. */
+// ---- sharing with the other screens
+/** Each rundown as the main process last had it, and its change number. */
+const known = new Map<string, { json: string; rev: number }>();
+const ser = (d: Doc) => JSON.stringify({ id: d.id, path: d.path, name: d.name, allowRemote: d.allowRemote, dirty: d.dirty, items: d.items });
+let pending: Promise<void> = Promise.resolve();
+let sending = false;
+let again = false;
+let cut = false;
+/** Send changed rundowns to the main process, which is what actually plays them. */
 export function sync(): void {
-  pending = vt.call('docs', store.docs);
+  if (sending) { again = true; return; }
+  pending = send();
 }
 export const flush = () => pending;
+async function send(): Promise<void> {
+  sending = true;
+  do {
+    again = false;
+    const put = store.docs.map((d) => ({ d, json: ser(d) })).filter((x) => x.json !== known.get(x.d.id)?.json);
+    const drop = [...known.keys()].filter((id) => !store.docs.some((d) => d.id === id));
+    if (!put.length && !drop.length) break;
+    const r = await vt.call('docs', put.map(({ json, d }) => ({ doc: JSON.parse(json) as Doc, base: known.get(d.id)?.rev ?? 0 })), drop);
+    if (!r.ok) {
+      // Refused, or not sent. When the connection comes back everything is compared again.
+      if (r.lost) {
+        if (!cut) toast('No connection: your changes are sent when it is back', 'bad');
+        cut = true;
+        again = false;
+        setTimeout(sync, 2000);
+        break;
+      }
+      toast(r.error ?? 'The change was not saved', 'bad');
+      await reload();
+      continue;
+    }
+    cut = false;
+    for (const id of drop) known.delete(id);
+    const v = r.value as DocSync;
+    for (const { json, d } of put) if (v.revs[d.id] > (known.get(d.id)?.rev ?? 0)) known.set(d.id, { json, rev: v.revs[d.id] });
+    for (const c of v.conflicts) { fromOther([c], []); again = true; }
+  } while (again);
+  sending = false;
+}
+/** Take the main process's rundowns, dropping what it refused. */
+async function reload(): Promise<void> {
+  const r = await vt.call('init');
+  if (!r.ok) return;
+  const all = (r.value as { docs: DocPut[] }).docs;
+  known.clear();
+  for (const { doc: d, rev } of all) {
+    known.set(d.id, { json: ser(d), rev });
+    const mine = store.docs.find((x) => x.id === d.id);
+    if (mine) Object.assign(mine, structuredClone(d)); else store.docs.push(structuredClone(d));
+  }
+  store.docs = store.docs.filter((d) => known.has(d.id));
+  if (!store.docs.length) newDoc();
+  settle();
+}
+/** The first rundowns, and again after a lost connection. */
+export function gotDocs(all: DocPut[]): void {
+  fromOther(all, [...known.keys()].filter((id) => !all.some((x) => x.doc.id === id)));
+  if (!store.docs.length) newDoc();
+  sync();
+}
+/** Another screen changed, opened or closed something. */
+export function fromOther(put: DocPut[], drop: string[]): void {
+  let unsent = false;
+  for (const { doc: theirs, rev } of put) {
+    const k = known.get(theirs.id);
+    if (k && rev <= k.rev) continue;
+    const mine = store.docs.find((d) => d.id === theirs.id);
+    known.set(theirs.id, { json: ser(theirs), rev });
+    if (!mine) { store.docs.push(structuredClone(theirs)); continue; }
+    const base = k ? (JSON.parse(k.json) as Doc) : structuredClone(theirs);
+    const merged = ser(mine) === k?.json ? structuredClone(theirs) : mergeDoc(base, mine, structuredClone(theirs));
+    if (ser(merged) !== ser(theirs)) unsent = true;
+    const was = JSON.parse(JSON.stringify(mine.items)) as Item[];
+    const u = undoOf(mine.id);
+    for (const l of [u.past, u.future]) l.at(-1)?.theirs.push({ base: was, next: structuredClone(merged.items) });
+    mergeKey = '';
+    keepFolds(mine.items, merged.items);
+    Object.assign(mine, merged);
+  }
+  if (drop.length) {
+    for (const id of drop) { known.delete(id); undos.delete(id); }
+    store.docs = store.docs.filter((d) => !drop.includes(d.id));
+  }
+  settle();
+  if (unsent) sync();
+}
+function settle(): void {
+  if (!doc() && store.docs.length) { store.active = store.docs[0].id; store.sel.clear(); }
+  const d = doc();
+  const before = store.sel.size;
+  for (const id of [...store.sel]) if (!d || !findItem(d.items, id)) store.sel.delete(id);
+  emit('tabs');
+  emit('doc');
+  if (before !== store.sel.size) emit('select');
+}
 
 let mergeKey = '';
 let mergeAt = 0;
@@ -70,7 +170,7 @@ export function mutate(fn: (items: Item[], d: Doc) => void, merge = ''): void {
   if (!d) return;
   const u = undoOf(d.id);
   if (!merge || merge !== mergeKey || Date.now() - mergeAt > 1000) {
-    u.past.push(JSON.stringify(d.items));
+    u.past.push({ json: JSON.stringify(d.items), theirs: [] });
     if (u.past.length > 150) u.past.shift();
   }
   mergeKey = merge;
@@ -86,10 +186,14 @@ export function undo(redo = false): void {
   const d = doc();
   if (!d) return;
   const u = undoOf(d.id);
-  const s = (redo ? u.future : u.past).pop();
+  const from = redo ? u.future : u.past;
+  const s = from.pop();
   if (!s) return;
-  (redo ? u.past : u.future).push(JSON.stringify(d.items));
-  d.items = JSON.parse(s) as Item[];
+  (redo ? u.past : u.future).push({ json: JSON.stringify(d.items), theirs: [] });
+  let items = JSON.parse(s.json) as Item[];
+  for (const t of s.theirs) items = mergeItems(t.base, items, structuredClone(t.next));
+  from.at(-1)?.theirs.push(...s.theirs); // older steps are from before it too
+  d.items = items;
   d.dirty = true;
   mergeKey = '';
   for (const id of [...store.sel]) if (!findItem(d.items, id)) store.sel.delete(id);
@@ -126,8 +230,25 @@ export function addDocs(docs: Doc[]): void {
   }
 }
 export async function openFiles(): Promise<void> {
+  if (vt.web) return webOpen();
   const r = await call<Doc[]>('open');
   if (r?.length) addDocs(r);
+}
+/** In a browser: rundowns on the show PC, or one from this device. */
+async function webOpen(): Promise<void> {
+  const r = await openSheet((await call<Folder[]>('files')) ?? []);
+  if (!r) return;
+  if ('path' in r) return openPath(r.path);
+  const d = await call<Doc>('openText', r.name, r.text);
+  if (d) addDocs([d]);
+}
+export async function download(d = doc()): Promise<void> {
+  if (!d) return;
+  const x = await call<string>('xml', d);
+  if (x === undefined) return;
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([x], { type: 'application/xml' })), download: `${d.name.replace(/[<>:"/\\|?*]/g, '_')}.xml` });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 export async function openPath(f: string): Promise<void> {
   const r = await call<Doc>('openPath', f);
@@ -135,7 +256,13 @@ export async function openPath(f: string): Promise<void> {
 }
 export async function save(as = false, d = doc()): Promise<boolean> {
   if (!d) return false;
-  const r = await call<{ path: string; name: string } | null>('save', d, as);
+  let r: { path: string; name: string } | null | undefined;
+  if (vt.web && (as || !d.path)) {
+    const to = await saveSheet((await call<Folder[]>('files')) ?? [], d);
+    if (!to) return false;
+    if (to === 'download') { await download(d); return false; }
+    r = await call('saveTo', d, to.dir, to.name);
+  } else r = await call<{ path: string; name: string } | null>('save', d, as);
   if (!r) return false;
   Object.assign(d, r, { dirty: false });
   sync();

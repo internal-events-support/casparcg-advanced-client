@@ -1,13 +1,14 @@
 // App shell: windows, settings, documents and IPC. Playback keeps running here if the window is closed.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import type dgram from 'node:dgram';
 import fs from 'node:fs';
 import type http from 'node:http';
 import path from 'node:path';
-import { isMissing, type Seen } from '../shared/relink';
+import type { Seen } from '../shared/relink';
 import { newItem } from '../shared/tools';
-import { DEFAULT_SETTINGS, stem, uid, type Action, type AppState, type Doc, type Item, type Library, type Loc, type LogLine, type Settings } from '../shared/types';
+import { DEFAULT_SETTINGS, stem, uid, type Action, type AppState, type Doc, type DocPut, type DocSync, type Item, type Library, type Loc, type LogLine, type Settings } from '../shared/types';
 import { parseRundown, writeRundown } from '../shared/xml';
 import { readLegacy, startCountdown, startHttp, startOsc, takeOpts, type ApiHooks } from './api';
 import { q } from './commands';
@@ -15,7 +16,7 @@ import { Device } from './device';
 import { Engine, Refused } from './engine';
 import { Preview } from './preview';
 import { Runner } from './runner';
-import { addresses, Web } from './web';
+import { addresses, Web, type Client, type WebHooks } from './web';
 
 if (process.env.CASPARVT_USERDATA) app.setPath('userData', process.env.CASPARVT_USERDATA);
 else app.setPath('userData', path.join(app.getPath('appData'), 'Caspar VT'));
@@ -29,6 +30,17 @@ let win: BrowserWindow | null = null;
 let settingsWin: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
+
+// ---- screens --------------------------------------------------------------------------------------
+/** Whose request is being handled. Follows the work through anything it starts. */
+const asking = new AsyncLocalStorage<Client>();
+const PC: Client = { id: 'pc', web: false, local: true, send: (name, ...args) => win?.webContents.send(name, ...args) };
+const who = () => asking.getStore() ?? PC;
+/** Tell every screen. */
+function tell(name: string, ...args: unknown[]): void {
+  win?.webContents.send(name, ...args);
+  webSrv?.send(name, args);
+}
 
 // ---- settings -------------------------------------------------------------------------------------
 function loadSettings(): Settings {
@@ -56,9 +68,9 @@ function log(dir: LogLine['dir'], device: string, text: string): void {
   const l = { t: Date.now(), dir, device, text };
   logs.push(l);
   if (logs.length > 2000) logs.splice(0, 500);
-  win?.webContents.send('log', l);
+  tell('log', l);
 }
-const toast = (text: string, kind: 'ok' | 'bad' = 'ok') => win?.webContents.send('toast', text, kind);
+const toast = (text: string, kind: 'ok' | 'bad' = 'ok') => { const c = asking.getStore(); if (c) c.send('toast', text, kind); else tell('toast', text, kind); };
 const problem = (e: unknown) => { const m = e instanceof Error ? e.message : String(e); log('err', '', m); toast(m, 'bad'); };
 
 // ---- devices ----------------------------------------------------------------------------------------
@@ -92,9 +104,8 @@ async function refresh(name: string): Promise<void> {
 }
 function setLibrary(name: string, lib: Library): void {
   library[name] = lib;
-  win?.webContents.send('library', name, lib);
+  tell('library', name, lib);
   noteSeen(name, lib);
-  webSrv?.docs();
 }
 /** Every clip ever seen, so a renamed file can be recognised by its size and length. */
 let seen: Record<string, Seen> = {};
@@ -224,24 +235,11 @@ const hooks: ApiHooks = {
   },
   log: (k, t) => log(k, 'Remote', t),
 };
-const seconds = (i: Item): number => {
-  if (i.type !== 'MOVIE' && i.type !== 'AUDIO') return 0;
-  const dev = i.device || engine.home();
-  const m = library[dev]?.media.find((x) => x.name.toLowerCase() === i.name.replace(/\\/g, '/').toLowerCase());
-  if (!m) return 0;
-  const fps = device(dev)?.fps(i.channel) || 50;
-  return Number(i.props.length) > 0 ? Number(i.props.length) / fps : Math.max(0, m.seconds - (Number(i.props.seek) || 0) / fps);
-};
-const webHooks = {
-  docs: () => {
-    const one = (i: Item): unknown => ({ id: i.id, type: i.type, label: i.label, name: i.name, device: i.device || engine.home(), channel: i.channel, layer: i.layer, color: i.color, secs: seconds(i), missing: isMissing(i, library[i.device || engine.home()]),
-      auto: i.type === 'PLAYLIST' ? i.props.cgauto !== false : !!i.props.autoplay, loop: i.type === 'PLAYLIST' ? i.props.cgloop === 'Loop forever' : !!i.props.loop, ...(i.items ? { items: i.items.map(one) } : {}) });
-    return { skip: settings.skipSeconds, docs: [...runner.docs.values()].map((d) => ({ id: d.id, name: d.name, items: d.items.map(one) })) };
-  },
-  state: () => { const s = state(); return { devices: s.devices.map((d) => ({ name: d.name, connected: d.connected, channels: d.channels })), layers: Object.fromEntries(Object.entries(s.layers).filter(([, l]) => l.producer !== 'empty').map(([k, l]) => [k, { ...l, pos: Math.round(l.pos * 10) / 10 }])), decks: s.decks, items: s.items }; },
-  execute: (id: string, a: Action) => runner.execute(id, a),
-  transport: (t: Loc, v: string) => hooks.transport(t, v),
-  take: hooks.take,
+const webHooks: WebHooks = {
+  call: (c, name, args) => dispatch(c, name, args),
+  state: () => state(),
+  media: (token, range) => preview.serve(token, range),
+  left: (c) => preview.cancel(c.id),
   log: hooks.log,
 };
 const flat = (items: Item[]): Item[] => items.flatMap((i) => [i, ...flat(i.items ?? [])]);
@@ -276,6 +274,7 @@ function state(): AppState {
 // ---- documents ---------------------------------------------------------------------------------------------
 function openDoc(file: string): Doc {
   const { items, allowRemote } = parseRundown(fs.readFileSync(file, 'utf8'));
+  for (const i of flat(items)) if (i.type === 'SHELL') knownShell.add(shellOf(i)); // it came from this PC
   const doc: Doc = { id: uid(), path: file, name: path.basename(file).replace(/\.xml$/i, ''), allowRemote, dirty: false, items };
   remember(file);
   return doc;
@@ -283,24 +282,77 @@ function openDoc(file: string): Doc {
 function remember(file: string): void {
   settings.recent = [file, ...settings.recent.filter((f) => f !== file)].slice(0, 10);
   saveSettings();
-  win?.webContents.send('settings', settings);
+  tell('settings', settings);
 }
 function saveSettings(): void { writeSafe(ud('settings.json'), JSON.stringify(settings, null, 2)); }
 
-function setDocs(docs: Doc[]): void {
-  const before = new Map(runner.playlists().map((p) => [p.id, JSON.stringify([p.props, (p.items ?? []).map((i) => [i.id, i.name, i.props.seek, i.props.length])])]));
-  runner.docs = new Map(docs.map((d) => [d.id, d]));
-  for (const p of runner.playlists()) {
-    const now = JSON.stringify([p.props, (p.items ?? []).map((i) => [i.id, i.name, i.props.seek, i.props.length])]);
-    if (before.has(p.id) && before.get(p.id) !== now) void engine.run(() => engine.playlistEdited(p)).catch(problem);
+/** The open rundowns live here; every screen shows them. Each has a number that goes up when it changes. */
+const revs = new Map<string, number>();
+let lastRev = Date.now(); // ahead of anything a screen still remembers from before a restart
+const nextRev = () => (lastRev = Math.max(lastRev + 1, Date.now()));
+const copyOf = (id: string): DocPut => ({ doc: runner.docs.get(id)!, rev: revs.get(id)! });
+const sig = (p: Item) => JSON.stringify([p.props, (p.items ?? []).map((i) => [i.id, i.name, i.props.seek, i.props.length])]);
+
+/** A screen changed some rundowns. What somebody else changed first comes back for it to merge. */
+function syncDocs(put: { doc: Doc; base: number }[], drop: string[]): DocSync {
+  const c = who();
+  const out: DocSync = { revs: {}, conflicts: [] };
+  const before = new Map(runner.playlists().map((p) => [p.id, sig(p)]));
+  const done: string[] = [];
+  if (c.web) for (const { doc } of put) checkShell(c, doc.items);
+  for (const { doc, base } of put) {
+    const was = runner.docs.get(doc.id);
+    if (was && revs.get(doc.id) !== base) { out.conflicts.push(copyOf(doc.id)); continue; }
+    if (c.web && doc.path && doc.path !== was?.path && !allowedFile(doc.path)) doc.path = was?.path ?? '';
+    runner.docs.set(doc.id, doc);
+    revs.set(doc.id, nextRev());
+    out.revs[doc.id] = revs.get(doc.id)!;
+    done.push(doc.id);
   }
-  scheduleSession(docs);
-  webSrv?.docs();
+  const gone = drop.filter((id) => runner.docs.delete(id));
+  for (const id of gone) revs.delete(id);
+  if (!done.length && !gone.length) return out;
+  for (const p of runner.playlists()) if (before.has(p.id) && before.get(p.id) !== sig(p)) void engine.run(() => engine.playlistEdited(p)).catch(problem);
+  scheduleSession();
+  const news = { put: done.map(copyOf), drop: gone };
+  if (c.id !== 'pc') win?.webContents.send('docs', news);
+  webSrv?.send('docs', [news], c.id);
+  return out;
 }
+
+// ---- what a browser may not do -------------------------------------------------------------------------------
+/** Shell commands run programs on this PC, so a browser on another device can play the ones that are here but not write its own. */
+const shellOf = (i: Item) => JSON.stringify([i.props.cgshell ?? '', i.props.cgshellstop ?? '', i.props.cgshelldir ?? '']);
+const knownShell = new Set<string>(['["","",""]']);
+function checkShell(c: Client, items: Item[]): void {
+  if (!c.web || c.local) return;
+  const known = new Set([...knownShell, ...[...runner.docs.values()].flatMap((d) => flat(d.items)).filter((i) => i.type === 'SHELL').map(shellOf)]);
+  if (flat(items).some((i) => i.type === 'SHELL' && !known.has(shellOf(i)))) throw new Refused('Shell commands can only be written on the show PC');
+}
+function checkSettings(c: Client, patch: Partial<Settings>): void {
+  if (!c.web) return;
+  delete patch.recent;
+  if (c.local) return;
+  const differs = (k: keyof Settings) => k in patch && JSON.stringify(patch[k]) !== JSON.stringify(settings[k]);
+  const folders = (l: Settings['devices']) => l.filter((d) => d.media).map((d) => JSON.stringify([d.name, d.media]));
+  if (differs('allowShell') || differs('ffmpeg') || differs('web') || differs('legacyConfig') || (patch.devices && folders(patch.devices).some((x) => !folders(settings.devices).includes(x)))) throw new Refused('That can only be changed on the show PC');
+}
+/** Folders a browser may open rundowns from and save them to: the ones already in use here. */
+function rundownDirs(): string[] {
+  const used = [...settings.recent, ...[...runner.docs.values()].map((d) => d.path)].filter(Boolean).map((f) => path.dirname(path.resolve(f)));
+  return [...new Set([...used, app.getPath('documents')])];
+}
+function allowedFile(f: string): boolean {
+  const full = path.resolve(String(f));
+  const base = path.basename(full);
+  if (!/\.xml$/i.test(base) || /[<>:"|?*]/.test(base) || /^(con|prn|aux|nul|com\d|lpt\d)\./i.test(base)) return false;
+  return rundownDirs().some((d) => d.toLowerCase() === path.dirname(full).toLowerCase());
+}
+
 let sessionTimer: NodeJS.Timeout | null = null;
-function scheduleSession(docs: Doc[]): void {
+function scheduleSession(): void {
   if (sessionTimer) clearTimeout(sessionTimer);
-  sessionTimer = setTimeout(() => { sessionTimer = null; writeSafe(ud('session.json'), JSON.stringify(docs)); }, 300);
+  sessionTimer = setTimeout(() => { sessionTimer = null; writeSafe(ud('session.json'), JSON.stringify([...runner.docs.values()])); }, 300);
 }
 function loadSession(): Doc[] {
   try { return (JSON.parse(fs.readFileSync(ud('session.json'), 'utf8')) as Doc[]).filter((d) => Array.isArray(d.items)); } catch { return []; }
@@ -309,15 +361,19 @@ function loadSession(): Doc[] {
 // ---- IPC ---------------------------------------------------------------------------------------------------
 const XML_FILTER = [{ name: 'CasparCG rundown', extensions: ['xml'] }];
 const handlers: Record<string, (...a: never[]) => unknown> = {
-  init: () => ({ settings, docs: loadSession(), library, logs: logs.slice(-500), state: state(), version: __APP_VERSION__ }),
-  docs: (docs: Doc[]) => setDocs(docs),
+  init: () => ({ settings, docs: [...runner.docs.keys()].map(copyOf), library, logs: logs.slice(-500), state: state(), version: __APP_VERSION__ }),
+  docs: (put: { doc: Doc; base: number }[], drop: string[]) => syncDocs(put, drop),
   execute: (id: string, a: Action) => runner.execute(id, a),
   transport: (t: Loc, v: string) => hooks.transport(t, v),
   seek: (t: Loc, s: number) => engine.run(() => engine.seek(t, s, true)),
   take: (a: Loc, b: Loc, o: { fade: boolean; roll: boolean; hold: boolean; frames: number }) => hooks.take(a, b, o),
   used: (ids: string[], u: boolean) => runner.setUsed(ids, u),
-  previewOpen: (dev: string, name: string) => preview.open(mediaFolder(dev), name),
-  previewCancel: () => preview.cancel(),
+  previewOpen: async (dev: string, name: string) => {
+    const c = who();
+    const r = await preview.open(c.id, mediaFolder(dev), name, (p) => c.send('previewProgress', p));
+    return c.web ? { ...r, url: r.url.replace('vtmedia://clip/', '/media/') } : r;
+  },
+  previewCancel: () => preview.cancel(who().id),
   refresh: (n: string) => refresh(n),
   thumb: async (n: string, name: string) => (device(n)?.connected ? device(n)!.thumbnail(name).catch(() => '') : ''),
   raw: async (n: string, cmd: string) => { const r = await device(n)?.cmd(cmd); return r ? r.lines : []; },
@@ -328,30 +384,51 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
     const r = await dialog.showOpenDialog(win!, { title: 'Open rundown', filters: XML_FILTER, properties: ['openFile', 'multiSelections'] });
     return r.filePaths.map(openDoc);
   },
-  openPath: (f: string) => openDoc(f),
+  openPath: (f: string) => {
+    if (who().web && !allowedFile(f)) throw new Refused('That file can only be opened on the show PC');
+    return openDoc(f);
+  },
+  // For a browser, in place of the file dialogs.
+  files: () => rundownDirs().map((dir) => { try { return { dir, files: fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && /\.xml$/i.test(e.name)).map((e) => e.name).sort((a, b) => a.localeCompare(b)) }; } catch { return { dir, files: [] }; } }),
+  openText: (name: string, xml: string): Doc => { const { items, allowRemote } = parseRundown(xml); checkShell(who(), items); return { id: uid(), path: '', name: name.replace(/\.xml$/i, '').slice(0, 120) || 'Rundown', allowRemote, dirty: true, items }; },
+  xml: (doc: Doc) => writeRundown(doc.items, doc.allowRemote),
+  saveTo: (doc: Doc, dir: string, name: string) => {
+    const f = path.join(dir, /\.xml$/i.test(name) ? name : `${name}.xml`);
+    if (/[\\/]/.test(name) || !allowedFile(f)) throw new Refused('That name or folder cannot be used');
+    checkShell(who(), doc.items);
+    return store(doc, f);
+  },
   save: async (doc: Doc, as: boolean) => {
+    const c = who();
     let f = doc.path;
-    if (as || !f) {
+    if (c.web) {
+      if (as || !f || (f !== runner.docs.get(doc.id)?.path && !allowedFile(f))) throw new Refused('Choose where to save it');
+      checkShell(c, doc.items);
+    } else if (as || !f) {
       const r = await dialog.showSaveDialog(win!, { title: 'Save rundown', filters: XML_FILTER, defaultPath: f || doc.name + '.xml' });
       if (r.canceled || !r.filePath) return null;
       f = r.filePath;
     }
-    writeSafe(f, writeRundown(doc.items, doc.allowRemote));
-    remember(f);
-    return { path: f, name: path.basename(f).replace(/\.xml$/i, '') };
+    return store(doc, f);
   },
-  presetSave: (name: string, items: Item[]) => { writeSafe(presetFile(name), writeRundown(items, false)); for (const n of devices.keys()) if (library[n]) { library[n].presets = presetNames(); win?.webContents.send('library', n, library[n]); } return presetNames(); },
+  presetSave: (name: string, items: Item[]) => { checkShell(who(), items); writeSafe(presetFile(name), writeRundown(items, false)); for (const n of devices.keys()) if (library[n]) { library[n].presets = presetNames(); tell('library', n, library[n]); } return presetNames(); },
   presetLoad: (name: string) => parseRundown(fs.readFileSync(presetFile(name), 'utf8')).items,
   presetRemove: (name: string) => { fs.rmSync(presetFile(name), { force: true }); return presetNames(); },
   presets: () => presetNames(),
   getSettings: () => settings,
   setSettings: async (patch: Partial<Settings>) => {
+    checkSettings(who(), patch);
+    if (patch.web) {
+      const code = String(patch.web.code ?? '').trim();
+      if (code.length < 6 || code.length > 64) throw new Refused('The access code needs 6 to 64 characters');
+      patch.web = { ...patch.web, code };
+    }
     const svc = JSON.stringify([settings.http, settings.osc, settings.countdown, settings.web]);
     settings = { ...settings, ...patch };
     saveSettings();
     syncDevices();
     if (JSON.stringify([settings.http, settings.osc, settings.countdown, settings.web]) !== svc) syncServices();
-    win?.webContents.send('settings', settings);
+    tell('settings', settings);
     settingsWin?.webContents.send('settings', settings);
     return settings;
   },
@@ -359,8 +436,8 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
   services: () => services,
   seen: (n: string) => seen[n] ?? {},
   webInfo: () => ({ state: services.web, addresses: settings.web.lan ? addresses() : [] }),
-  webOpen: () => shell.openExternal(`http://127.0.0.1:${settings.web.port}/#${settings.web.code}`),
-  webNewCode: async () => { settings = { ...settings, web: { ...settings.web, code: newCode() } }; saveSettings(); syncServices(); settingsWin?.webContents.send('settings', settings); return settings; },
+  webOpen: () => shell.openExternal(`http://127.0.0.1:${settings.web.port}/#${encodeURIComponent(settings.web.code)}`),
+  webNewCode: async () => { if (who().web) throw new Refused('That can only be changed on the show PC'); settings = { ...settings, web: { ...settings.web, code: newCode() } }; saveSettings(); syncServices(); settingsWin?.webContents.send('settings', settings); return settings; },
   deviceStates: () => state().devices,
   browseFolder: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { properties: ['openDirectory'] }); return r.filePaths[0] ?? ''; },
   browseExe: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { title: 'Choose ffmpeg.exe', filters: [{ name: 'ffmpeg', extensions: ['exe'] }], properties: ['openFile'] }); return r.filePaths[0] ?? ''; },
@@ -369,11 +446,22 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
   hide: () => win?.hide(),
 };
 
+const store = (doc: Doc, f: string) => {
+  writeSafe(f, writeRundown(doc.items, doc.allowRemote));
+  remember(f);
+  return { path: f, name: path.basename(f).replace(/\.xml$/i, '') };
+};
+/** Needs a window on this PC, so not for a browser. */
+const PC_ONLY = new Set(['open', 'browseFolder', 'browseExe', 'browse', 'webOpen', 'openSettings', 'quit', 'hide']);
+
+async function dispatch(c: Client, name: string, args: unknown[]): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+  const h = Object.hasOwn(handlers, name) ? (handlers[name] as (...a: unknown[]) => unknown) : undefined;
+  if (!h || (c.web && PC_ONLY.has(name))) return { ok: false, error: h ? 'That can only be done on the show PC' : `Unknown call ${name}` };
+  try { return { ok: true, value: await asking.run(c, async () => h(...args)) }; } catch (err) { const m = (err as Error).message; log('err', '', m); return { ok: false, error: m }; }
+}
 ipcMain.handle('vt', async (e: IpcMainInvokeEvent, name: string, ...args: unknown[]) => {
   if (!e.senderFrame?.url.startsWith('file:')) throw new Error('Refused');
-  const h = handlers[name] as ((...a: unknown[]) => unknown) | undefined;
-  if (!h) throw new Error(`Unknown call ${name}`);
-  try { return { ok: true, value: await h(...args) }; } catch (err) { const m = (err as Error).message; log('err', '', m); return { ok: false, error: m }; }
+  return dispatch(settingsWin && e.sender === settingsWin.webContents ? { ...PC, id: 'settings' } : PC, name, args);
 });
 
 // ---- windows ------------------------------------------------------------------------------------------------
@@ -414,14 +502,15 @@ app.on('second-instance', () => openMain());
 app.on('window-all-closed', () => { /* keep running: playlists need us */ });
 app.on('before-quit', () => {
   engine?.saveNow();
+  if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; writeSafe(ud('session.json'), JSON.stringify([...runner.docs.values()])); }
   preview?.cancel();
 });
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'vtmedia', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
 
 void app.whenReady().then(() => {
-  preview = new Preview(ud('preview-cache'), () => settings.ffmpeg || autoFfmpeg, (p) => win?.webContents.send('previewProgress', p));
-  protocol.handle('vtmedia', (r) => preview.serve(r));
+  preview = new Preview(ud('preview-cache'), () => settings.ffmpeg || autoFfmpeg);
+  protocol.handle('vtmedia', (r) => preview.serve(new URL(r.url).pathname.slice(1), r.headers.get('range') ?? undefined));
   Menu.setApplicationMenu(null);
   settings = loadSettings();
   if (!settings.web.code) { settings.web.code = newCode(); saveSettings(); }
@@ -431,10 +520,11 @@ void app.whenReady().then(() => {
   runner = new Runner(device, () => [...devices.values()], engine, () => settings);
   runner.on('log', (k: 'info', t: string) => log(k, '', t));
   runner.on('problem', problem);
-  runner.on('playout', (c: string) => win?.webContents.send('playout', c));
+  runner.on('playout', (c: string) => who().send('playout', c));
   try { for (const [k, v] of JSON.parse(fs.readFileSync(ud('media.json'), 'utf8')) as [string, string][]) autoMedia.set(k, v); } catch { /* none yet */ }
   for (const [, v] of autoMedia) { const ff = path.join(path.dirname(v), 'ffmpeg.exe'); if (fs.existsSync(ff)) autoFfmpeg = ff; }
   runner.docs = new Map(loadSession().map((d) => [d.id, d]));
+  for (const d of runner.docs.values()) { revs.set(d.id, nextRev()); for (const i of flat(d.items)) if (i.type === 'SHELL') knownShell.add(shellOf(i)); }
   syncDevices();
   syncServices();
   openMain();

@@ -3,7 +3,7 @@ import { newItem, TOOLS } from '../shared/tools';
 import type { Item, Library, MediaEntry } from '../shared/types';
 import { button, confirmSheet, h, icon, iconButton, menu, popup, promptSheet, segmented, textField } from './kit';
 import { previewClip } from './preview';
-import { call, clock, hasTemplate, homeDevice, insert, itemFromMedia, stamp, on, playlists, selectedTop, store, thumb, toast, wrap } from './store';
+import { touch, call, clock, hasTemplate, homeDevice, insert, itemFromMedia, stamp, on, playlists, selectedTop, store, thumb, toast, wrap } from './store';
 
 type Tab = 'media' | 'templates' | 'tools' | 'data' | 'presets';
 let tab: Tab = 'media';
@@ -21,6 +21,7 @@ export function dragItems(e: DragEvent): Item[] {
   try { return (JSON.parse(s) as { items?: Item[] }).items ?? []; } catch { return []; }
 }
 function draggable(el: HTMLElement, make: () => Item[]): void {
+  if (touch) return;
   el.draggable = true;
   el.addEventListener('dragstart', (e) => {
     e.dataTransfer!.setData(DRAG, JSON.stringify({ items: make() }));
@@ -96,6 +97,7 @@ export function buildLibrary(): HTMLElement {
         ...playlists().filter((p) => p.doc.id === store.active).slice(0, 8).map((p) => ({ label: `Add to ${p.item.label}`, icon: 'playlist', disabled: !vids.length, onClick: () => insert(vids.map(itemFromMedia), { parent: p.item.id, index: p.item.items!.length }) })),
       ]);
     });
+    if (touch) row.append(iconButton('plus', (e) => { e.stopPropagation(); const b = (e.currentTarget as HTMLElement).getBoundingClientRect(); row.dispatchEvent(new MouseEvent('contextmenu', { clientX: b.left, clientY: b.bottom })); }, 'Add', 'plain lib-add'));
     return row;
   }
 
@@ -128,6 +130,7 @@ export function buildLibrary(): HTMLElement {
     const probe = make();
     if (probe) draggable(row, () => make() ?? []);
     if (extra.items) row.addEventListener('contextmenu', (e) => { e.preventDefault(); menu({ x: e.clientX, y: e.clientY }, extra.items!); });
+    if (touch) row.append(iconButton(extra.items ? 'ellipsis' : 'plus', (e) => { e.stopPropagation(); if (extra.items) menu(e.currentTarget as HTMLElement, extra.items); else { insert(make() ?? []); toast(`Added ${name}`); } }, 'Add', 'plain lib-add'));
     list.append(row);
   }
 

@@ -60,7 +60,7 @@ jobs:
             Start-Sleep 1
             try {
               $page = (Invoke-WebRequest http://127.0.0.1:8126/ -UseBasicParsing -TimeoutSec 2).Content
-              $js = (Invoke-WebRequest http://127.0.0.1:8126/web.js -UseBasicParsing -TimeoutSec 2).StatusCode
+              foreach ($f in 'web.js', 'ui/app.js', 'ui/settings.js', 'settings', 'web.css', 'css/app.css') { $js = (Invoke-WebRequest "http://127.0.0.1:8126/$f" -UseBasicParsing -TimeoutSec 2).StatusCode }
               $st = (Invoke-WebRequest http://127.0.0.1:8125/status -UseBasicParsing -TimeoutSec 2).Content
               if ($page -match 'CasparCG Client' -and $js -eq 200 -and $st -match '"connected":false') { $ok = $true; break }
             } catch { }

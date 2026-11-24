@@ -7,12 +7,13 @@ import { pathToFileURL } from 'node:url'
 import { ROOT, checker } from './lib.mjs'
 
 const out = path.join(ROOT, 'dist/test')
-for (const f of ['shared/xml', 'shared/tools', 'main/commands', 'main/osc']) execFileSync(process.execPath, [path.join(ROOT, 'node_modules/esbuild/bin/esbuild'), path.join(ROOT, `src/${f}.ts`), '--bundle', '--platform=node', '--format=esm', `--outfile=${path.join(out, path.basename(f))}.mjs`, '--log-level=error'])
+for (const f of ['shared/xml', 'shared/tools', 'shared/merge', 'main/commands', 'main/osc']) execFileSync(process.execPath, [path.join(ROOT, 'node_modules/esbuild/bin/esbuild'), path.join(ROOT, `src/${f}.ts`), '--bundle', '--platform=node', '--format=esm', `--outfile=${path.join(out, path.basename(f))}.mjs`, '--log-level=error'])
 const imp = (n) => import(pathToFileURL(path.join(out, n + '.mjs')))
 const { parseRundown, writeRundown } = await imp('xml')
 const { TOOLS, newItem } = await imp('tools')
 const { commandsFor, qChecksum } = await imp('commands')
 const osc = await imp('osc')
+const { mergeItems, mergeDoc } = await imp('merge')
 const c = checker()
 const strip = (x) => JSON.parse(JSON.stringify(x, (k, v) => (k === 'id' ? undefined : v)))
 
@@ -34,6 +35,37 @@ if (fs.existsSync(desk)) { const d = parseRundown(fs.readFileSync(desk, 'utf8'))
 const un = parseRundown('<?xml version="1.0"?><items><item><type>MOVIE</type><name>x</name><mystery>7</mystery><transtitionDuration>9</transtitionDuration></item></items>')
 c.ok('unknown tags are kept, old spelling is read', un.items[0].extra?.mystery === '7' && un.items[0].props.transitionDuration === 9, un.items[0])
 for (const bad of ['', '<items>', '<x></x>', '<items><item></items>', 'hello']) { let threw = false; try { parseRundown(bad) } catch { threw = true } c.ok(`refuses broken file ${JSON.stringify(bad)}`, threw) }
+
+// Two screens editing one rundown.
+{
+	const it = (id, o = {}) => ({ id, type: 'MOVIE', label: id, name: id, channel: 1, layer: 10, props: { seek: 0, loop: false }, ...o })
+	const box = (id, items) => ({ id, type: 'GROUP', label: id, name: id, channel: 1, layer: 10, props: {}, items })
+	const base = () => [it('a'), it('b'), box('g', [it('x'), it('y')]), it('c')]
+	const cp = (x) => JSON.parse(JSON.stringify(x))
+	const go = (f, g) => { const m = base(), t = base(); f(m); g(t); return mergeItems(base(), m, t) }
+	const shape = (l) => l.map((i) => i.items ? `${i.id}(${shape(i.items)})` : i.id).join(' ')
+	const r1 = go((m) => { m[0].label = 'A2'; m[0].props.seek = 5 }, (t) => { t[0].props.loop = true; t[1].label = 'B2' }); c.ok('merge: different fields of one entry both stay', r1[0].label === 'A2' && r1[0].props.seek === 5 && r1[0].props.loop === true && r1[1].label === 'B2', r1)
+	c.ok('merge: both add', shape(go((m) => m.splice(1, 0, it('m')), (t) => t.push(it('t')))) === 'a m b g(x y) c t', shape(go((m) => m.splice(1, 0, it('m')), (t) => t.push(it('t')))))
+	c.ok('merge: one moves, one adds', shape(go((m) => m.unshift(m.pop()), (t) => t.splice(1, 0, it('t')))) === 'c a t b g(x y)', shape(go((m) => m.unshift(m.pop()), (t) => t.splice(1, 0, it('t')))))
+	c.ok('merge: delete against edit deletes', shape(go((m) => m.splice(1, 1), (t) => { t[1].label = 'z' })) === 'a g(x y) c')
+	c.ok('merge: into a group and out of it', shape(go((m) => m[2].items.push(m.shift()), (t) => t.push(t[2].items.shift()))) === 'b g(y a) c x', shape(go((m) => m[2].items.push(m.shift()), (t) => t.push(t[2].items.shift()))))
+	c.ok('merge: an entry added to a group the other deleted is kept', shape(go((m) => m.splice(2, 1), (t) => t[2].items.push(it('n')))).includes('n'))
+	c.ok('merge: ungroup against an edit inside', (() => { const r = go((m) => m.splice(2, 1, ...m[2].items), (t) => { t[2].items[1].label = 'Y2' }); return shape(r) === 'a b x y c' && r[3].label === 'Y2' })())
+	const d = (items, o = {}) => ({ id: 'd', path: 'p', name: 'n', allowRemote: true, dirty: true, items, ...o })
+	const m1 = base(); m1[0].label = 'mine'; const md = mergeDoc(d(base()), d(m1), d(base(), { dirty: false })); c.ok('merge: a save elsewhere leaves my change unsaved', md.dirty === true && md.items[0].label === 'mine', md.dirty)
+	c.ok('merge: my save of what I have stays saved', mergeDoc(d(base()), d(m1, { dirty: false }), d(base())).dirty === false)
+	// Random edits on both sides never lose, repeat or misplace an entry.
+	let seed = 7; const rnd = (n) => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n; let bad = null; let nn = 0
+	const ids = (l) => l.flatMap((i) => [i.id, ...ids(i.items ?? [])])
+	const mess = (l, who) => { for (let k = rnd(4); k >= 0; k--) { const boxes = [l, ...l.filter((i) => i.items).map((i) => i.items)]; const from = boxes[rnd(boxes.length)]; const op = rnd(4); if (op === 0) from.splice(rnd(from.length + 1), 0, it(who + nn++)); else if (op === 1 && from.length) from.splice(rnd(from.length), 1); else if (op === 2 && from.length) { const [x] = from.splice(rnd(from.length), 1); const to = x.items ? l : boxes[rnd(boxes.length)]; to.splice(rnd(to.length + 1), 0, x) } else if (from.length) from[rnd(from.length)].label = who + nn++ } return l }
+	for (let k = 0; k < 4000 && !bad; k++) {
+		const b = mess(base(), 'b'), m = mess(cp(b), 'm'), t = mess(cp(b), 't'), r = mergeItems(cp(b), cp(m), cp(t)); const [B, M, T, X] = [b, m, t, r].map(ids)
+		const want = new Set([...T.filter((i) => M.includes(i) || !B.includes(i)), ...M.filter((i) => !B.includes(i))])
+		if (new Set(X).size !== X.length || X.length !== want.size || X.some((i) => !want.has(i))) bad = [b, m, t, r].map(shape)
+		if (JSON.stringify(mergeItems(cp(b), cp(m), cp(b))) !== JSON.stringify(m) || JSON.stringify(mergeItems(cp(b), cp(b), cp(t))) !== JSON.stringify(t)) bad = ['identity', shape(b), shape(m), shape(t)]
+	}
+	c.ok('merge: 4000 random pairs of edits keep every entry once', !bad, bad)
+}
 
 // Commands match the original client's strings.
 const cmd = (type, a, o = {}, run = { loaded: false, paused: false }) => commandsFor(newItem(type, { channel: 1, layer: 10, name: 'CLIP', ...o }), a, run).join(' | ')
