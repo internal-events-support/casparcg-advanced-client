@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "type": "commonjs",
   "productName": "CasparCG Advanced Client",
-  "author": "nerif-tafu",
+  "author": "neriftafu",
   "scripts": {
     "build": "node scripts/build.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -22,9 +22,9 @@
     "typescript": "^7.0.2"
   },
   "build": {
-    "appId": "com.nerif-tafu.casparcg-advanced-client",
+    "appId": "com.neriftafu.casparcg-advanced-client",
     "productName": "CasparCG Advanced Client",
-    "copyright": "Copyright © 2026 nerif-tafu",
+    "copyright": "Copyright © 2026 neriftafu",
     "npmRebuild": false,
     "directories": {
       "output": "release"
