@@ -5,11 +5,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { CG, checker, sleep, startApp, startServer } from './lib.mjs'
 
-const [dir, media, legacy, logFile] = process.argv.slice(2)
+const [dir, media, logFile] = process.argv.slice(2)
 if (logFile) { const s = fs.createWriteStream(logFile); console.log = (...a) => s.write(a.join(' ') + '\n') }
 fs.mkdirSync(dir, { recursive: true })
 const ud = path.join(dir, 'userdata-' + process.pid)
-const settings = { devices: [{ name: 'Localhost', host: '127.0.0.1', port: 5350, preview: 3, shadow: false }], http: { enabled: true, port: 8131 }, osc: { enabled: true, port: 3351 }, countdown: { enabled: true, port: 8132, layer: 10, caution: 30, warn: 10, flash: 5 }, oscOutputs: [{ name: 'me', host: '127.0.0.1', port: 7351 }], legacyConfig: legacy }
+const settings = { devices: [{ name: 'Localhost', host: '127.0.0.1', port: 5350, preview: 3, shadow: false }], http: { enabled: true, port: 8131 }, osc: { enabled: true, port: 3351 }, countdown: { enabled: true, port: 8132, layer: 10, caution: 30, warn: 10, flash: 5 }, oscOutputs: [{ name: 'me', host: '127.0.0.1', port: 7351 }] }
 const c = checker()
 let srv, app
 try {
@@ -92,7 +92,11 @@ try {
 	for (let i = 0; i < 5; i++) { await mon(2, 'Forward'); await sleep(250) } s = await until(async () => { const x = await st(); return x.two.end - x.two.pos <= 0.04 && x }, 3000); await sleep(150); c.ok('forward stops at the end', !!s, (await st()).two)
 	await mon(2, 'Play'); s = await until(async () => { const x = await st(); return x.two.pos < 3 && x.two.pos > 0.2 && x }); c.ok('play at the end starts again', !!s, (await st()).two)
 	await mon(2, 'Stop'); await until(async () => (await st()).two.producer === 'empty'); await sleep(300)
-	const keep = name((await st()).one); const refused = await take('cut'); await sleep(400); s = await st(); c.ok('a take from an empty layer is refused, and says why', name(s.one) === keep && s.one.producer !== 'empty' && /2-10 is empty/.test(refused), refused)
+	const keep = name((await st()).one); for (const how of ['cut', 'fade/10']) {
+		await take(how); s = await until(async () => { const x = await st(); return x.one.producer === 'empty' && name(x.two) === keep && x.two.paused && x }); c.ok(`a ${how} from an empty layer takes the other one off`, !!s && s.two.deck === 'Ends', (await st()).layers)
+		await take('cutplay'); s = await until(async () => { const x = await st(); return name(x.one) === keep && !x.one.paused && x.two.producer === 'empty' && x }); c.ok('and it comes back', !!s && s.one.deck === 'Ends', (await st()).layers)
+	}
+	const op = (await srv.amcp('MIXER 1-10 OPACITY')) + (await srv.amcp('MIXER 1-10 VOLUME')); c.ok('opacity and volume are put back', (op.match(/^1(\.0*)?\s*$/gm) ?? []).length === 2, op)
 
 	// --- takes between any two channels
 	await srv.amcp('PLAY 4-20 a1'); await srv.amcp('LOAD 3-30 a2'); await sleep(500); await tab('Channels')
@@ -104,7 +108,7 @@ try {
 	s = await until(async () => { const x = await st(); return name(x.at('4-20')) === 'a2' && name(x.at('3-30')) === 'a1' && x.at('3-30').paused && x.at('4-20').paused && x })
 	c.ok('take from the Channels view: 3-30 to 4-20', !!s && name(s.one) === onAir, (await st()).layers)
 	c.ok('fade across layers and channels with its own length', /Fade 4-20 to 3-30/.test(await take('fadeplay/10', '4-20', '3-30')) && await until(async () => { const x = await st(); return name(x.at('3-30')) === 'a2' && !x.at('3-30').paused && name(x.at('4-20')) === 'a1' }), (await st()).layers)
-	for (const [what, f, t, re] of [['the same layer', '1-10', '1-10', /different layers/], ['a channel that does not exist', '1-10', '9-10', /4 channels/], ['an empty layer', '4-77', '1-10', /empty/]]) { const r = await take('cut', f, t); c.ok('refuses ' + what, re.test(r), r) }
+	for (const [what, f, t, re] of [['the same layer', '1-10', '1-10', /different layers/], ['a channel that does not exist', '1-10', '9-10', /4 channels/], ['two empty layers', '4-77', '4-78', /both empty/]]) { const r = await take('cut', f, t); c.ok('refuses ' + what, re.test(r), r) }
 	await srv.amcp('PLAY 3-31 a3'); await sleep(400); const rf = await take('fade', '4-20', '3-30'); c.ok('refuses a fade with no free layer above', /layer 31/.test(rf), rf)
 	await srv.amcp('CLEAR 3'); await srv.amcp('CLEAR 4'); await sleep(300)
 	await tab('Edit')
@@ -127,7 +131,7 @@ try {
 	const flip = (label) => p.ev(`${prop(label)}.querySelector('.toggle, input, button').click()`)
 	const oneOff = async () => (await st()).at('4-10')
 	await srv.amcp('CLEAR 4'); await pick('Ends'); await sleep(200)
-	const chan = (v) => p.ev(`(()=>{const i=${prop('Channel')}.querySelector('input');i.value='${v}';i.dispatchEvent(new Event('change',{bubbles:true}));return true})()`)
+	const chan = (v) => p.ev(`(()=>{const i=${prop('Channel')}.querySelector('input,select');i.value='${v}';i.dispatchEvent(new Event('change',{bubbles:true}));return true})()`)
 	await chan(4); await sleep(300); await flip('Play next automatically'); await sleep(400)
 	c.ok('its icons and its clips say it waits', await until(async () => (await flagsOf('Ends')) === 'holdNext.hold,stopEnd' && (await flagsOf('e1')) === 'holdNext.hold' && (await flagsOf('e3')) === 'stopEnd'), [await flagsOf('Ends'), await flagsOf('e1'), await flagsOf('e3')])
 	// Ends was still loaded on 2-10 from the tests above: free it, then load it fresh on channel 4.
@@ -195,13 +199,10 @@ try {
 	osc('/control/take/2-10/1-10/cutplay'); c.ok('OSC take', await until(async () => (await st()).one.deck === 'Ends'))
 	c.ok('HTTP playlist by number', /Loop: load/.test(await http('/playlist/1/load')), await http('/playlist/1/load'))
 	c.ok('a web page cannot trigger anything', (await fetch('http://127.0.0.1:8131/take/2-10/1-10/cut', { headers: { Origin: 'http://evil.example' } })).status === 403)
-	c.ok('earlier controller URLs still work: clip', /PVW/.test(await http('/pvw/load/clip/1')) && !!(await until(async () => name((await st()).two) === 'a1')))
-	c.ok('earlier controller URLs still work: playlist', /loop/.test(await http('/pvw/load/playlist/loop/2')) && !!(await until(async () => name((await st()).two) === 'p2')), await st())
-	mk = srv.mark(); await http('/gfx/lt/1'); await sleep(400); c.ok('earlier controller URLs still work: graphics', srv.sent(mk).some((x) => x.startsWith('PLAY 4-20')), srv.sent(mk))
-	await srv.amcp('PLAY 2-10 a1', 500); c.ok('earlier controller URLs still work: take', /2-10/.test(await http('/take/cutplay')) && !!(await until(async () => name((await st()).one) === 'a1')))
+	await srv.amcp('PLAY 2-10 a1', 500); await http('/take/2-10/1-10/cutplay'); await until(async () => name((await st()).one) === 'a1'); c.ok('unknown addresses are refused', (await fetch('http://127.0.0.1:8131/pgm/play')).status === 404)
 	osc('/control/layer/1-10/pause'); c.ok('OSC layer pause', await until(async () => (await st()).one.paused)); osc('/control/layer/1-10/play'); await until(async () => !(await st()).one.paused)
-	const cd = await new Promise((ok) => { const ac = new AbortController(); fetch('http://127.0.0.1:8132/events?ch=1', { signal: ac.signal }).then(async (r) => { const v = new TextDecoder().decode((await r.body.getReader().read()).value); ac.abort(); ok(v) }, () => ok('')) })
-	c.ok('countdown feed for the monitor overlays', /"status":"(play|end|cued|pause|loop)"/.test(cd), cd)
+	const cd = await new Promise((ok) => { const ac = new AbortController(); fetch('http://127.0.0.1:8132/events?server=Localhost&ch=1', { signal: ac.signal }).then(async (r) => { const v = new TextDecoder().decode((await r.body.getReader().read()).value); ac.abort(); ok(v) }, () => ok('')) })
+	c.ok('what the playback overlay shows', /"status":"(play|end|cued|pause|loop)"/.test(cd), cd)
 
 	// --- takes under stress, then frame by frame
 	await srv.amcp('LOAD 1-10 a1'); await srv.amcp('LOAD 2-10 a2'); await sleep(700)
@@ -229,7 +230,7 @@ try {
 	await p.ev(`document.querySelector('.lib-tabs [title=Tools]').click()`); await sleep(200)
 	await p.ev(`[...document.querySelectorAll('.library .lib-row, .library [draggable]')].find(r=>r.textContent.includes('Channel Take')).dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`); await sleep(400)
 	c.ok('Channel Take can be added from the tools', await p.ev(`[...document.querySelectorAll('.rd-row')].some(r=>/Channel Take/.test(r.textContent))`))
-	const setProp = (label, v) => p.ev(`(()=>{const r=[...document.querySelectorAll('.inspector .group-row, .inspector .in-row')].find(x=>x.textContent.trim().startsWith(${JSON.stringify(label)}));const i=r?.querySelector('input');if(!i)return false;i.value=${JSON.stringify(v)};i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}));i.blur();return true})()`)
+	const setProp = (label, v) => p.ev(`(()=>{const r=[...document.querySelectorAll('.inspector .group-row, .inspector .in-row')].find(x=>x.textContent.trim().startsWith(${JSON.stringify(label)}));const i=r?.querySelector('input,select');if(!i)return false;i.value=${JSON.stringify(v)};i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}));i.blur();return true})()`)
 	c.ok('its channels can be set', (await setProp('From channel', '3')) && (await setProp('To channel', '4')), await p.ev(`document.querySelector('.inspector').innerText`))
 	await sleep(400); await p.key('F2'); s = await until(async () => { const x = await st(); return name(x.at('4-10')) === 'a3' && x.at('3-10').producer === 'empty' && x }); c.ok('F2 on a Channel Take moves 3-10 to 4-10', !!s, (await st()).layers)
 	await srv.amcp('CLEAR 4')
@@ -273,7 +274,7 @@ try {
 
 	// --- closing while something plays
 	c.ok('no test sent a stream or a screen to the server', !srv.sent(begin).some((x) => /STREAM|^ADD /.test(x) && !/vtrec/.test(x)), srv.sent(begin).filter((x) => /^ADD/.test(x)))
-	await http('/playlist/1/play'); await until(async () => (await st()).two.pos > 0.2)
+	await http('/playlist/1/play'); await until(async () => { const x = await st(); return x.two.pos > 0.2 || x.one.pos > 0.2 })
 	execFileSync('python', ['-I', '-c', `import ctypes
 from ctypes import wintypes as w
 u=ctypes.windll.user32
@@ -284,7 +285,8 @@ def cb(h,l):
 u.EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool,w.HWND,w.LPARAM)(cb),0)`]); await sleep(600)
 	c.ok('closing during a playlist asks first', await until(() => p.ev(`/playlist is on air/i.test(document.querySelector('.sheet')?.textContent ?? '')`), 6000), await p.ev(`document.querySelector('.sheet')?.textContent`))
 	await p.ev(`[...document.querySelectorAll('.sheet .btn')].find(b=>/Keep running/.test(b.textContent)).click()`); await sleep(500)
-	const a0 = name((await st()).two); c.ok('keeps running hidden', !!(await until(async () => name((await st()).two) !== a0, 6000)))
+	// Wherever it was last taken to.
+	const both = async () => { const x = await st(); return `${name(x.one)} ${name(x.two)}` }; const a0 = await both(); c.ok('keeps running hidden', !!(await until(async () => (await both()) !== a0, 6000)), a0)
 } catch (e) {
 	console.log('FAIL stopped early:', e.stack)
 	c.fails.push('stopped early')

@@ -13,6 +13,11 @@
 .web-settings .icon-btn { position: absolute; right: 6px; top: 5px; z-index: 1; width: 30px; height: 28px; }
 .web .topbar, .web .titlebar { -webkit-app-region: no-drag; }
 .web .topbar { padding-right: 12px; }
+.touch .split { width: 22px; }
+.touch .split.left { left: calc(var(--lib, 268px) - 8px); }
+.touch .split.right { right: calc(var(--det, 330px) - 14px); }
+.touch .split.left::after { left: 7px; }
+.touch .split.right::after { left: 8px; }
 .web .menu { max-height: calc(100dvh - 16px); overflow-y: auto; }
 .web .sheet { max-width: 94vw; max-height: 94dvh; overflow-y: auto; }
 .files .group { margin: 12px 0 0; }
@@ -71,8 +76,9 @@
   .web .s-log-row { grid-template-columns: 1fr; gap: 0; padding-bottom: 6px; }
   .web .ch-row { flex-wrap: wrap; height: auto; padding: 8px 10px 10px; row-gap: 6px; }
   .web .ch-layer { width: auto; }
+  .web .ch-head { flex-wrap: wrap; height: auto; min-height: 36px; padding: 6px 10px; }
+  .web .ch-name { flex: 1; min-width: 110px; }
   .web .ch-main { flex: 1 1 50%; }
-  .web .ch-scrub { order: 2; flex: 1 1 100%; max-width: none; }
   .web .ch-keys { order: 3; flex: 1; justify-content: space-between; }
   .web .ch-keys .icon-btn { width: 40px; height: 36px; }
   .web .ch-row > .btn { order: 3; height: 32px; }

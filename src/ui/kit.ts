@@ -102,6 +102,9 @@ export const ICONS: Record<string, string> = {
   externalLink: S('<path d="M9 2.5h4.5V7M13.5 2.5 7 9M12 9.5V13H3V4h3.5"/>'),
   trash: S('<path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/>'),
   copy: S('<rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/>'),
+  scissors: S('<circle cx="4" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><path d="M5 10.4 11 2M11 10.4 5 2"/>'),
+  paste: S('<rect x="3" y="3" width="10" height="11" rx="1.5"/><rect x="5.8" y="1.6" width="4.4" height="2.8" rx=".8"/><path d="M5.8 8h4.4M5.8 10.8h3"/>'),
+  duplicate: S('<rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5M9.5 7.3v4.4M7.3 9.5h4.4"/>'),
   pencil: S('<path d="m10.5 2.5 3 3L6 13H3v-3z"/>'),
   pause: F('<rect x="3.8" y="3" width="3" height="10" rx=".8"/><rect x="9.2" y="3" width="3" height="10" rx=".8"/>'),
   next: F('<path d="M3 3v10l7-5z"/><rect x="11" y="3" width="2" height="10" rx=".6"/>'),
@@ -320,7 +323,10 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: { width
   // Open below the anchor, or above it when it would run off the bottom (e.g. the bottom bar).
   const ph = pop.offsetHeight;
   const above = r.bottom + 10 + ph > window.innerHeight - 8 && r.top - 10 - ph >= 8;
-  pop.style.top = above ? `${r.top - 10 - ph}px` : `${r.bottom + 10}px`;
+  // Neither fits: as low as it goes without running off the bottom.
+  const top = above ? r.top - 10 - ph : Math.max(8, Math.min(r.bottom + 10, window.innerHeight - ph - 8));
+  pop.style.top = `${top}px`;
+  pop.classList.toggle('no-arrow', !above && top < r.bottom + 10);
   pop.classList.toggle('above', above);
   pop.style.setProperty('--arrow-x', `${r.left + r.width / 2 - left}px`);
   const close = () => {

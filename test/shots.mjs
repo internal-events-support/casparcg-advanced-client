@@ -19,7 +19,7 @@ fs.writeFileSync(path.join(ud, 'session.json'), JSON.stringify([{ id: 'd1', path
 let srv, app
 try {
 	srv = await startServer(path.join(dir, 'server2'), path.join(CG, 'media'))
-	app = await startApp(ud, { devices: [{ name: 'Localhost', host: '127.0.0.1', port: 5350, preview: 0, shadow: false }], http: { enabled: true, port: 8131 }, osc: { enabled: true, port: 3351 }, countdown: { enabled: true, port: 8132, layer: 10, caution: 30, warn: 10, flash: 5 }, legacyConfig: path.join(CG, 'vt_config.json') })
+	app = await startApp(ud, { devices: [{ name: 'Localhost', host: '127.0.0.1', port: 5350, preview: 0, shadow: false }], http: { enabled: true, port: 8131 }, osc: { enabled: true, port: 3351 }, countdown: { enabled: true, port: 8132, layer: 10, caution: 30, warn: 10, flash: 5 } })
 	const p = await app.page('index.html')
 	await p.send('Emulation.setDeviceMetricsOverride', { width: 1560, height: 960, deviceScaleFactor: 1, mobile: false })
 	await sleep(5000)

@@ -1,8 +1,7 @@
-// Remote control: local HTTP API, OSC control (same paths as the original client) and the countdown feed for monitor overlays.
+// Remote control: local HTTP API and OSC control (same paths as the original client).
 import dgram from 'node:dgram';
-import fs from 'node:fs';
 import http from 'node:http';
-import type { Action, LayerState, Loc } from '../shared/types';
+import type { Action, Loc } from '../shared/types';
 import type { TakeOpts } from './engine';
 import { decode } from './osc';
 
@@ -14,23 +13,10 @@ export interface ApiHooks {
   remoteItem: (rid: string, a: Action) => Promise<string>;
   rundown: (verb: string) => void;
   playlist: (ref: string, verb: string, n?: number) => Promise<string>;
-  legacy: (path: string[]) => Promise<string | null>;
+  overlay: (ref: string, verb: string) => Promise<string | null>;
   status: () => unknown;
-  countdown: (channel: number) => { layer: LayerState; at: number; others: { n: number; l: LayerState }[]; next: string };
   log: (kind: 'info' | 'err', text: string) => void;
 }
-export interface LegacyConfig {
-  pgm_channel: number;
-  pvw_channel: number;
-  layer: number;
-  fade_frames: number;
-  clips: string[];
-  playlists: Record<string, { loop: boolean; clips: string[] }>;
-  lt: { file: string; title: string }[];
-  rq: { file: string; title: string }[];
-  gfx_channel: number;
-}
-
 export const CONTROL: Record<string, Action> = {
   stop: 'stop', play: 'play', playnow: 'playNow', load: 'load', pause: 'pause', next: 'next', previous: 'prev', prev: 'prev', back: 'back', forward: 'forward', update: 'update',
   invoke: 'invoke', preview: 'preview', clear: 'clear', clearvideolayer: 'clearLayer', clearchannel: 'clearChannel',
@@ -63,7 +49,8 @@ export function startHttp(port: number, h: ApiHooks, done: (state: string) => vo
       if (p[0] === 'take' && p.length >= 4 && TAKES.includes(p[3])) { const a = h.loc(p[1]); const b = h.loc(p[2]); return a && b ? h.take(a, b, takeOpts(p[3], p[4])) : null; }
       if (p[0] === 'item' && p.length === 3 && CONTROL[p[2]]) return h.remoteItem(p[1], CONTROL[p[2]]);
       if (p[0] === 'playlist' && p.length >= 3) return h.playlist(p[1], p[2], p[3] ? Number(p[3]) : undefined);
-      return h.legacy(p);
+      if (p[0] === 'overlay' && p.length === 3 && ['show', 'hide', 'toggle'].includes(p[2])) return h.overlay(p[1], p[2]);
+      return null;
     };
     run().then(
       (r) => (r === null ? say(404, 'Unknown command') : say(200, r, p[0] === 'status' ? 'application/json' : undefined)),
@@ -100,64 +87,4 @@ export function startOsc(port: number, h: ApiHooks, done: (state: string) => voi
   });
   s.bind(port, '127.0.0.1', () => done(''));
   return s;
-}
-
-const clock = (n: number) => {
-  const s = Math.max(0, Math.floor(n));
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
-};
-
-/** Same feed as the earlier countdown helper, so the existing monitor overlays work unchanged. */
-export function startCountdown(cfg: { port: number; caution: number; warn: number; flash: number }, h: ApiHooks, done: (state: string) => void): http.Server {
-  const one = (l: LayerState, at: number, next = '') => {
-    const out = { layer: at, status: 'idle', level: 'normal', left: '', elapsed: '', total: '', pct: 0, name: l.name.replace(/\\/g, '/').split('/').pop() ?? '', next };
-    if (l.producer === 'empty') return { ...out, name: '' };
-    if (!l.end) return { ...out, status: 'nolength' };
-    const left = Math.max(0, l.end - l.pos);
-    const gone = Math.max(0, l.pos - l.start);
-    const total = l.end - l.start;
-    out.status = left <= 0.04 && !l.loop ? 'end' : l.paused ? (gone < 0.1 ? 'cued' : 'pause') : l.loop ? 'loop' : 'play';
-    if (!l.loop) out.level = left <= cfg.warn ? 'warn' : left <= cfg.caution ? 'caution' : 'normal';
-    if (out.status === 'play' && left <= cfg.flash) out.level = 'flash';
-    const shown = Math.max(0, Math.ceil(left - 0.02));
-    const all = Math.ceil(total - 0.02);
-    return { ...out, left: clock(shown), total: clock(all), elapsed: clock(all - shown), pct: Math.round(Math.min(100, (gone / total) * 100) * 10) / 10 };
-  };
-  const view = (ch: number) => {
-    const { layer, at, others, next } = h.countdown(ch);
-    return { ...one(layer, at, next), others: others.map((x) => one(x.l, x.n)) };
-  };
-  const srv = http.createServer((req, res) => {
-    const u = new URL(req.url ?? '/', 'http://x');
-    const ch = Number(u.searchParams.get('ch'));
-    if (u.pathname !== '/events' || !(ch > 0)) {
-      res.writeHead(404);
-      res.end();
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': 'null' });
-    let last = '';
-    let sent = 0;
-    const t = setInterval(() => {
-      const s = JSON.stringify(view(ch));
-      if (s === last && Date.now() - sent <= 1000) return;
-      res.write(`data: ${s}\n\n`);
-      last = s;
-      sent = Date.now();
-    }, 50);
-    req.on('close', () => clearInterval(t));
-  });
-  srv.on('error', (e: NodeJS.ErrnoException) => done(portError(cfg.port)(e)));
-  srv.listen(cfg.port, '127.0.0.1', () => done(''));
-  return srv;
-}
-
-export function readLegacy(file: string): LegacyConfig | null {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8')) as LegacyConfig;
-  } catch {
-    return null;
-  }
 }

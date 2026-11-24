@@ -6,12 +6,14 @@ import { button, confirmSheet, h, icon, iconButton, popover, segmented, textFiel
 import { buildLibrary } from './library';
 import { buildChannels } from './channels';
 import { buildPreview, previewMode, previewKey, previewPause, previewToggle } from './preview';
-import { buildRundown, closeDoc, setCollapsed } from './rundown';
+import { buildRundown, closeDoc, markUsed, setCollapsed } from './rundown';
+import { splitters } from './split';
 import { activate, applyTemplate, call, copy, copyTemplate, doc, duplicate, emit, execute, fromOther, gotDocs, homeDevice, moveSelection, newDoc, on, openFiles, paste, touch, removeSelected, save, store, sync, toast, undo, ungroup, visible, vt, wrap } from './store';
 
 type Tab = 'edit' | 'show' | 'channels' | 'activity';
 let tab: Tab = 'edit';
 let body: HTMLElement;
+let columns: ReturnType<typeof splitters>;
 const hosts = new Map<Tab, HTMLElement>();
 let inspector: HTMLElement;
 let info: HTMLElement;
@@ -28,6 +30,7 @@ function showTab(t: Tab): void {
   for (const [k, el] of hosts) el.hidden = k !== t;
   body.classList.toggle('show', t === 'show');
   body.classList.toggle('wide', t !== 'edit' && t !== 'show');
+  columns.apply();
   inspector.hidden = t !== 'edit';
   info.hidden = t !== 'show';
   panels.el.parentElement!.hidden = t !== 'edit' && t !== 'show';
@@ -163,6 +166,7 @@ function keys(e: KeyboardEvent): void {
   if (tab === 'activity' || tab === 'channels') return;
   if (editing && !e.altKey && !ctrl && (k === 'i' || k === 'o')) { done(); if (!e.repeat) previewKey(e.shiftKey ? (k === 'i' ? 'goIn' : 'goOut') : k === 'i' ? 'in' : 'out'); return; }
   if (editing && !e.altKey && !ctrl && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { done(); previewKey(`${e.key === 'ArrowLeft' ? 'back' : 'fwd'}${e.shiftKey ? '10' : ''}`); return; }
+  if (tab === 'show' && k === 'u' && !ctrl && !e.altKey) { done(); if (!e.repeat) markUsed(); return; }
   if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { done(); void act(e.key === 'ArrowLeft' ? 'back' : 'forward'); return; }
   if (ctrl && e.shiftKey && k === 'c') { done(); copyTemplate(); return; }
   if (ctrl && e.shiftKey && k === 'v') { done(); applyTemplate(); return; }
@@ -200,6 +204,7 @@ async function start(): Promise<void> {
     tabhost.append(el);
   }
   body = h('div.vt-body', buildLibrary(), h('div.vt-center', tabhost), h('div.vt-right', buildPreview(), (inspector = buildInspector()), (info = buildInfo())));
+  columns = splitters(body);
   panels = segmented([{ value: 'library', label: 'Library' }, { value: 'rundown', label: 'Rundown' }, { value: 'details', label: 'Details' }], 'rundown', showPanel);
   showPanel('rundown');
   root.append(top, body, h('div.panels', panels.el), bottomBar());

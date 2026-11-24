@@ -267,22 +267,33 @@ export class Engine extends EventEmitter {
     if (from.channel > n || to.channel > n) throw new Refused(`${dev.cfg.name} has ${n} channels`);
     const [fa, fb] = [dev.channels[from.channel - 1], dev.channels[to.channel - 1]];
     if (fa !== fb) throw new Refused(`Channel ${from.channel} is ${fa} and channel ${to.channel} is ${fb}; clips can only move between channels of the same format`);
+    const on = (l: Loc) => this.layer(l.device, l.channel, l.layer).producer !== 'empty';
+    // Something that was loaded a moment ago may not be in the status yet, and is not to be faded out to black for.
+    if (!on(from) && (o.fade || !on(to))) await sleep(150);
     const src = this.layer(from.device, from.channel, from.layer);
-    if (src.producer === 'empty') throw new Refused(`${a} is empty, so there is nothing to take`);
+    // Nothing there: the other one goes off, and comes here.
+    const none = !on(from);
+    if (none && !on(to)) throw new Refused(`${a} and ${b} are both empty, so there is nothing to take`);
     const overLayer = to.layer + 1;
     const over = `${to.channel}-${overLayer}`;
     // Same channel and the layer above: a fade has nowhere to work.
-    if (o.fade && (over === a || this.layer(to.device, to.channel, overLayer).producer !== 'empty')) throw new Refused(`A fade to ${b} needs layer ${overLayer} on that channel to be free`);
+    if (o.fade && !none && (over === a || this.layer(to.device, to.channel, overLayer).producer !== 'empty')) throw new Refused(`A fade to ${b} needs layer ${overLayer} on that channel to be free`);
     this.busy = true;
     try {
-      if (o.roll && this.ended(src)) await dev.cmd(`CALL ${a} SEEK 0`);
+      const roll = o.roll && !none;
+      if (roll && this.ended(src)) await dev.cmd(`CALL ${a} SEEK 0`);
       if (!o.fade) {
-        await dev.series([...(o.hold ? [`PAUSE ${b}`] : []), `SWAP ${b} ${a}`, ...(o.roll ? [`RESUME ${b}`] : [])]);
+        await dev.series([...(o.hold ? [`PAUSE ${b}`] : []), `SWAP ${b} ${a}`, ...(roll ? [`RESUME ${b}`] : [])]);
+      } else if (none) {
+        const f = Math.max(1, o.frames);
+        await dev.series([`MIXER ${b} OPACITY 0 ${f}`, `MIXER ${b} VOLUME 0 ${f}`]);
+        await sleep(((f + 3) / dev.fps(to.channel)) * 1000);
+        await dev.series([...(o.hold ? [`PAUSE ${b}`] : []), `SWAP ${b} ${a}`, `MIXER ${b} OPACITY 1`, `MIXER ${b} VOLUME 1`]);
       } else {
         const f = Math.max(1, o.frames);
         // Bring it in on the layer above, invisible, and fade it up over what is there.
         await dev.series([
-          `MIXER ${over} OPACITY 0`, `MIXER ${over} VOLUME 0`, `SWAP ${over} ${a}`, ...(o.roll ? [`RESUME ${over}`] : []),
+          `MIXER ${over} OPACITY 0`, `MIXER ${over} VOLUME 0`, `SWAP ${over} ${a}`, ...(roll ? [`RESUME ${over}`] : []),
           `MIXER ${over} OPACITY 1 ${f}`, `MIXER ${over} VOLUME 1 ${f}`, `MIXER ${b} VOLUME 0 ${f}`,
         ]);
         await sleep(((f + 3) / dev.fps(to.channel)) * 1000);
@@ -307,6 +318,18 @@ export class Engine extends EventEmitter {
       this.busy = false;
     }
     return `${o.fade ? 'Fade' : 'Cut'} ${a} to ${b}${o.roll ? ' and play' : ''}`;
+  }
+
+  /** A layer, or a whole channel, was emptied some other way: a playlist there is over. */
+  forget(device: string, channel: number, layer: number | null): void {
+    let hit = false;
+    for (const d of this.decks.values()) {
+      if (d.device !== device || d.channel !== channel || (layer !== null && d.layer !== layer)) continue;
+      d.stopped = true;
+      d.queued = null;
+      hit = true;
+    }
+    if (hit) this.changed();
   }
 
   // ---- surviving a restart ---------------------------------------------------------------------------

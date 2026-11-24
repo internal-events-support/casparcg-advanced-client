@@ -4,7 +4,7 @@ import type { Item } from '../shared/types';
 import { button, checkbox, h, icon, iconButton, popup, stepper, textField, toggle, type Child } from './kit';
 import { COLORS } from './rundown';
 import { missing, relinkSheet } from './relinkui';
-import { clock, edit, execute, homeDevice, itemSeconds, media, on, selected, store } from './store';
+import { channelOptions, clock, edit, itemSeconds, on, selected, store } from './store';
 
 const same = <T,>(items: Item[], get: (i: Item) => T): T | undefined => {
   const v = get(items[0]);
@@ -41,7 +41,15 @@ export function buildInspector(): HTMLElement {
     return input;
   }
 
+  /** A channel, by number and name. */
+  function channel(items: Item[], label: string, get: (i: Item) => number, set: (i: Item, v: number) => void, key: string): HTMLElement {
+    const v = same(items, get);
+    const dev = same(items, (i) => i.device);
+    const el = popup([...(v === undefined ? [{ value: '', label: 'Mixed', disabled: true }] : []), ...channelOptions(dev ?? '', [v])], v === undefined ? '' : String(v), (x) => edit(items.map((i) => i.id), key, (i) => set(i, Number(x))), { cls: 'sm' }).el;
+    return row(label, el);
+  }
   function propRow(items: Item[], p: Prop): HTMLElement {
+    if (['fromchannel', 'cgtfromchannel', 'cgttochannel'].includes(p.key)) return channel(items, p.label, (i) => Number(i.props[p.key] ?? p.def), (i, n) => { i.props[p.key] = n; }, p.key);
     const ids = items.map((i) => i.id);
     const get = (i: Item) => i.props[p.key] ?? p.def;
     const set = (v: string | number | boolean) => edit(ids, p.key, (i) => { i.props[p.key] = v; });
@@ -126,7 +134,7 @@ export function buildInspector(): HTMLElement {
     const has = (k: 'device' | 'channel' | 'layer' | 'delay' | 'duration') => items.every((i) => tool(i.type).out.includes(k));
     const out: (HTMLElement | null)[] = [
       has('device') ? (() => { const v = same(items, (i) => i.device); const names = store.settings.devices.map((d) => d.name); if (v && !names.includes(v)) names.unshift(v); return row('Server', popup([...(v ? [] : [{ value: '', label: v === undefined ? 'Mixed' : 'Choose…' }]), ...names.map((n) => ({ value: n, label: n }))], v ?? '', (x) => edit(ids, 'device', (i) => { i.device = x; }), { cls: 'sm' }).el); })() : null,
-      has('channel') ? row('Channel', num(items, (i) => i.channel, (i, v) => { i.channel = Math.round(v); }, 'channel', { min: 1, max: 99 })) : null,
+      has('channel') ? channel(items, 'Channel', (i) => i.channel, (i, v) => { i.channel = v; }, 'channel') : null,
       has('layer') ? row('Layer', num(items, (i) => i.layer, (i, v) => { i.layer = Math.round(v); }, 'layer', { min: 0, max: 9999 })) : null,
       has('delay') ? row('Delay (ms)', num(items, (i) => i.delay, (i, v) => { i.delay = Math.round(v); }, 'delay', { min: 0, max: 3600000, step: 100 })) : null,
       has('duration') ? row('Duration (ms)', num(items, (i) => i.duration, (i, v) => { i.duration = Math.round(v); }, 'duration', { min: 0, max: 86400000, step: 100 }), 'Stops by itself after this long. 0 = never.') : null,

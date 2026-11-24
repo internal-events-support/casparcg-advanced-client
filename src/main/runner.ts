@@ -149,20 +149,20 @@ export class Runner extends EventEmitter {
       r.loaded = true;
       r.paused = r.playing = false;
     } else if (a === 'pause') r.paused = !r.paused;
-    else if (a === 'stop' || a === 'clear' || a === 'clearLayer' || a === 'clearChannel') this.cleared(i, a === 'clearChannel');
+    else if (a === 'stop' || a === 'clear' || a === 'clearLayer' || a === 'clearChannel') this.forget(i.device, i.channel, a === 'clearChannel' ? null : i.layer);
   }
 
-  /** A layer (or channel) was emptied: forget what was on it. */
-  private cleared(i: Item, whole: boolean): void {
+  /** A layer, or a whole channel, was emptied: forget what was on it. */
+  forget(device: string, channel: number, layer: number | null): void {
     for (const d of this.docs.values()) {
       walk(d.items, (x) => {
-        if (x.device !== i.device || x.channel !== i.channel || (!whole && x.layer !== i.layer)) return;
+        if ((x.device || this.engine.home()) !== device || x.channel !== channel || (layer !== null && x.layer !== layer)) return;
         const y = this.rt.get(x.id);
         if (y) y.loaded = y.paused = y.playing = false;
       });
     }
-    const key = this.engine.key(i.device, i.channel, i.layer);
-    this.queues = this.queues.filter((x) => (whole ? !x.key.startsWith(`${i.device}|${i.channel}-`) : x.key !== key));
+    this.queues = this.queues.filter((x) => (layer === null ? !x.key.startsWith(`${device}|${channel}-`) : x.key !== this.engine.key(device, channel, layer)));
+    this.engine.forget(device, channel, layer);
   }
 
   // ---- programs on this PC ------------------------------------------------------------------------------
@@ -344,14 +344,11 @@ export class Runner extends EventEmitter {
           return `${pl.label}: ${l.paused ? 'resume' : 'pause'}`;
         case 'stop': case 'clear': case 'clearLayer':
           await dev.cmd(`CLEAR ${at}`);
-          if (d) {
-            d.stopped = true;
-            d.queued = null;
-          }
+          this.forget(where.device, where.channel, where.layer);
           return `${pl.label}: stopped`;
         case 'clearChannel':
           await dev.cmd(`CLEAR ${where.channel}`);
-          if (d) d.stopped = true;
+          this.forget(where.device, where.channel, null);
           return `${pl.label}: channel cleared`;
         default:
           throw new Refused('Playlists do not use that command');

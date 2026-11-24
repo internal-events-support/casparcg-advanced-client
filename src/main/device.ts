@@ -206,6 +206,7 @@ export class Device extends EventEmitter {
       switch (m[4]) {
         case 'producer': l.producer = String(v0); break;
         case 'file/name': l.name = String(v0); break;
+        case 'file/path': if (/\/overlay\?server=/.test(String(v0))) l.overlay = true; break;
         case 'paused': l.paused = !!v0; break;
         case 'loop': l.loop = !!v0; break;
         case 'file/time': l.pos = Number(v0) || 0; if (!l.end) l.end = Number(v1) || 0; break;

@@ -1,0 +1,164 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Playback overlay</title>
+<style>
+  /* 1rem = 16px on a 1280-wide channel at 100 %, and scales with the channel and the size that is set */
+  html { --size: 1; --margin: 4; font-size: calc(100vw / 80 * var(--size)); }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body { font-family: Bahnschrift, "DIN Alternate", "Segoe UI", Arial, sans-serif; color: #f2f4f6; font-variant-numeric: tabular-nums; }
+
+  #wrap { position: absolute; left: 2rem; right: 2rem; bottom: calc(1vh * var(--margin)); display: flex; flex-direction: column; gap: .35rem; }
+  .top #wrap { bottom: auto; top: calc(1vh * var(--margin)); flex-direction: column-reverse; }
+  .hidden #wrap { display: none; }
+
+  #bar { position: relative; height: 6.5rem; display: flex; background: rgba(9, 12, 16, .96); border: .0625rem solid #3a424c; box-sizing: border-box; }
+  #id { min-width: 5.5rem; max-width: 18rem; padding: 0 .8rem; box-sizing: border-box; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: #27303a; border-right: .0625rem solid #3a424c; }
+  #id small { font-size: .9rem; letter-spacing: .1em; color: #aab4bf; white-space: nowrap; }
+  #id small:empty { display: none; }
+  #id b { font-size: 2.3rem; line-height: 1.05; font-weight: 700; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  #id.mid b { font-size: 1.6rem; } #id.big b { font-size: 1.15rem; }
+
+  #info { flex: 1; min-width: 0; padding: .85rem 1.4rem 0; }
+  #row1 { display: flex; align-items: center; gap: .9rem; }
+  #status { flex: none; min-width: 4.6rem; text-align: center; padding: .22rem .5rem .18rem; font-size: 1.05rem; font-weight: 700; letter-spacing: .1em; color: #0a0d10; background: #8a95a1; }
+  #name { font-size: 1.75rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #row2 { display: flex; gap: 2rem; margin-top: .55rem; font-size: 1.3rem; white-space: nowrap; }
+  #row2 span { color: #9aa5b1; font-size: 1rem; letter-spacing: .1em; margin-right: .5rem; }
+  #nextwrap { overflow: hidden; text-overflow: ellipsis; }
+
+  #time { flex: none; width: 20rem; display: flex; flex-direction: column; align-items: center; justify-content: center; border-left: .0625rem solid #3a424c; padding-bottom: .45rem; box-sizing: border-box; }
+  #time small { font-size: .9rem; letter-spacing: .2em; color: #aab4bf; }
+  #left { font-size: 4.4rem; line-height: 1; margin-top: .1rem; font-weight: 700; letter-spacing: .02em; }
+  #left.long { font-size: 3.7rem; }
+  #track { position: absolute; left: 0; right: 0; bottom: 0; height: .45rem; background: #2a323b; }
+  #fill { height: 100%; width: 0; background: #dfe5ea; }
+
+  .play #status { background: #27c468; }
+  .loop #status { background: #38a3ff; }
+  .pause #status, .cued #status { background: #ffb400; }
+  .end #status { background: #ff3b30; color: #fff; }
+  .nolength #status { background: #c3ccd5; }
+  .fault #status { background: #ffb400; min-width: 9rem; }
+  .caution #left { color: #ffb400; }
+  .caution #fill { background: #ffb400; }
+  .warn #time, .flash #time { background: #c8102e; }
+  .warn #time small, .flash #time small { color: #fff; }
+  .warn #fill, .flash #fill { background: #ff3b30; }
+  .flash #time { animation: flash 1s steps(1) infinite; }
+  @keyframes flash { 50% { background: #4a0713; } }
+
+  /* Other clips on the same channel: a slim row each */
+  #more { display: flex; flex-direction: column; gap: .35rem; }
+  #more:empty { display: none; }
+  .row { position: relative; height: 2.7rem; display: flex; align-items: center; background: rgba(9, 12, 16, .96); border: .0625rem solid #3a424c; box-sizing: border-box; overflow: hidden; }
+  .row .lay { flex: none; width: 5.5rem; align-self: stretch; display: flex; align-items: center; justify-content: center; gap: .35rem; background: #27303a; border-right: .0625rem solid #3a424c; box-sizing: border-box; }
+  .lay small { font-size: .75rem; letter-spacing: .1em; color: #aab4bf; }
+  .lay b { font-size: 1.15rem; font-weight: 700; }
+  .row .st { flex: none; min-width: 3.9rem; margin-left: 1.4rem; text-align: center; padding: .16rem .4rem .12rem; font-size: .9rem; font-weight: 700; letter-spacing: .1em; color: #0a0d10; background: #8a95a1; box-sizing: border-box; }
+  .row .nm { flex: 1; min-width: 0; margin: 0 .9rem; font-size: 1.25rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .tc { flex: none; font-size: 1.05rem; color: #c3ccd5; margin-right: 1.2rem; white-space: nowrap; }
+  .row .lf { flex: none; width: 10rem; align-self: stretch; display: flex; align-items: center; justify-content: center; border-left: .0625rem solid #3a424c; font-size: 1.75rem; font-weight: 700; box-sizing: border-box; }
+  .row .ln { position: absolute; left: 5.5rem; bottom: 0; height: .2rem; background: #dfe5ea; }
+  .row.splay .st { background: #27c468; } .row.sloop .st { background: #38a3ff; }
+  .row.spause .st, .row.scued .st { background: #ffb400; }
+  .row.lcaution .lf { color: #ffb400; } .row.lcaution .ln { background: #ffb400; }
+  .row.lwarn .lf, .row.lflash .lf { background: #c8102e; } .row.lwarn .ln, .row.lflash .ln { background: #ff3b30; }
+  .row.over { height: 1.9rem; justify-content: center; color: #aab4bf; font-size: 1rem; letter-spacing: .08em; }
+  #layer { flex: none; display: none; font-size: 1rem; font-weight: 700; letter-spacing: .08em; color: #aab4bf; }
+  .several #layer { display: block; }
+
+  /* Nothing to time: shrink to a label so the picture stays clear */
+  .idle #time, .nolength #time, .fault #time, .idle #track, .nolength #track, .fault #track, .idle #tcwrap, .nolength #tcwrap, .fault #tcwrap { display: none; }
+  .idle #bar, .nolength #bar, .fault #bar { align-self: flex-start; height: 3rem; max-width: 44rem; }
+  .idle #id, .nolength #id, .fault #id { flex-direction: row; gap: .45rem; padding: 0 .9rem; }
+  .idle #id b, .nolength #id b, .fault #id b { font-size: 1.5rem; }
+  .idle #info, .nolength #info, .fault #info { display: flex; align-items: center; gap: 1.2rem; padding: 0 1.2rem 0 .8rem; }
+  .idle #row2, .nolength #row2, .fault #row2 { margin: 0; overflow: hidden; }
+  .idle #name, .nolength #name, .fault #name { font-size: 1.3rem; }
+  .hide, #name:empty { display: none; }
+</style>
+<body class="idle hidden">
+<div id="wrap">
+  <div id="more"></div>
+  <div id="bar">
+    <div id="id"><small></small><b></b></div>
+    <div id="info">
+      <div id="row1"><div id="status"></div><div id="layer"></div><div id="name"></div></div>
+      <div id="row2">
+        <div id="tcwrap"><span>POS</span><b id="elapsed"></b> / <b id="total"></b></div>
+        <div id="nextwrap" class="hide"><span>NEXT</span><b id="next"></b></div>
+      </div>
+    </div>
+    <div id="time"><small>REMAINING</small><div id="left"></div></div>
+    <div id="track"><div id="fill"></div></div>
+  </div>
+</div>
+<script>
+  // Started by PLAY [HTML], or as a template; stopping it as a template removes it.
+  function play() {}
+  function next() {}
+  function update() {}
+  function stop() { if (es) es.close(); es = null; if (window.remove) window.remove(); }
+
+  var es = null, last = Date.now(), cfg = null;
+  var LABEL = { play: 'PLAY', loop: 'LOOP', pause: 'PAUSE', cued: 'CUED', end: 'END', idle: 'NO CLIP', nolength: 'NO LENGTH', fault: 'NO TIMING' };
+  var ROWS = 4;
+  var $ = function (id) { return document.getElementById(id); };
+  function text(el, v) { if (el.textContent !== v) el.textContent = v; }
+
+  function rows(list) {
+    // Short of space: what is moving stays. Shown in layer order, highest on top.
+    var rank = function (d) { return d.status === 'play' || d.status === 'loop' ? 0 : 1; };
+    var shown = list.slice().sort(function (a, b) { return rank(a) - rank(b) || b.layer - a.layer; }).slice(0, ROWS);
+    shown.sort(function (a, b) { return b.layer - a.layer; });
+    var box = $('more'), extra = list.length - shown.length, want = shown.length + (extra > 0 ? 1 : 0);
+    while (box.children.length > want) box.removeChild(box.lastChild);
+    while (box.children.length < want) box.appendChild(document.createElement('div'));
+    for (var i = 0; i < want; i++) {
+      var el = box.children[i], d = shown[i];
+      if (!d) { el.className = 'row over'; el.textContent = '+ ' + extra + ' MORE'; continue; }
+      if (!el.querySelector('.nm')) el.innerHTML = '<div class="lay"><small>LAYER</small><b></b></div><div class="st"></div><div class="nm"></div><div class="tc"></div><div class="lf"></div><div class="ln"></div>';
+      el.className = 'row s' + d.status + ' l' + (d.level || 'normal');
+      text(el.querySelector('.lay b'), String(d.layer));
+      text(el.querySelector('.st'), LABEL[d.status] || d.status);
+      text(el.querySelector('.nm'), (d.name || '').toUpperCase());
+      text(el.querySelector('.tc'), (d.elapsed || '') + ' / ' + (d.total || ''));
+      text(el.querySelector('.lf'), d.left || '');
+      el.querySelector('.ln').style.width = 'calc((100% - 5.5rem) * ' + (d.pct || 0) / 100 + ')';
+    }
+  }
+  function show(d) {
+    if (d.cfg) cfg = d.cfg;
+    var c = cfg || { title: '', small: '', position: 'bottom', size: 100, margin: 4, next: true, idle: 'hide' };
+    var others = d.others || [], blank = d.status === 'idle' || d.status === 'nolength';
+    var hidden = !cfg || (blank && c.idle === 'hide' && !others.length);
+    document.documentElement.style.setProperty('--size', c.size / 100);
+    document.documentElement.style.setProperty('--margin', c.margin);
+    document.body.className = d.status + ' ' + (d.level || 'normal') + (others.length ? ' several' : '') + (c.position === 'top' ? ' top' : '') + (hidden ? ' hidden' : '');
+    text(document.querySelector('#id small'), c.small);
+    text(document.querySelector('#id b'), c.title);
+    $('id').className = c.title.length > 12 ? 'big' : c.title.length > 6 ? 'mid' : '';
+    rows(others);
+    text($('layer'), 'LAYER ' + d.layer);
+    text($('status'), LABEL[d.status] || d.status);
+    text($('name'), (d.name || '').toUpperCase());
+    text($('elapsed'), d.elapsed || '');
+    text($('total'), d.total || '');
+    text($('left'), d.left || '');
+    $('left').className = (d.left || '').length > 5 ? 'long' : '';
+    text($('next'), (d.next || '').toUpperCase());
+    $('nextwrap').className = d.next && c.next ? '' : 'hide';
+    $('fill').style.width = (d.pct || 0) + '%';
+  }
+  function connect() {
+    if (es) es.close();
+    last = Date.now();
+    es = new EventSource('events' + location.search);
+    es.onmessage = function (e) { last = Date.now(); show(JSON.parse(e.data)); };
+  }
+  // Say so rather than freeze on an old time if the client goes away, and keep reconnecting.
+  setInterval(function () { if (Date.now() - last > 2500) { show({ status: 'fault' }); connect(); } }, 500);
+  connect();
+</script>
+</body>

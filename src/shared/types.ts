@@ -43,6 +43,31 @@ export interface Doc {
 export interface DocPut { doc: Doc; rev: number }
 export interface DocSync { revs: Record<string, number>; conflicts: DocPut[] }
 
+/** The playback overlay of a channel: the time left on clips, shown on the channel as graphics. */
+export interface Overlay {
+  on: boolean;
+  /** Layer it is put on. */
+  layer: number;
+  /** Channel whose clips it shows. 0 = the one it is on. */
+  follow: number;
+  /** Layer of the clip that is shown large. 0 = chosen by itself. */
+  main: number;
+  /** Empty = the name of the channel it shows. */
+  title: string;
+  position: 'bottom' | 'top';
+  /** Per cent. */
+  size: number;
+  /** Distance from the edge, per cent of the height. */
+  margin: number;
+  /** Clips on other layers get a row of their own. */
+  others: boolean;
+  next: boolean;
+  /** With nothing to time: a small label, or nothing. */
+  idle: 'label' | 'hide';
+}
+export const DEFAULT_OVERLAY: Overlay = { on: false, layer: 900, follow: 0, main: 0, title: '', position: 'bottom', size: 100, margin: 4, others: true, next: true, idle: 'label' };
+export interface ChannelCfg { name?: string; overlay?: Partial<Overlay> }
+
 export interface DeviceCfg {
   name: string;
   host: string;
@@ -53,6 +78,8 @@ export interface DeviceCfg {
   scanner?: string;
   /** Folder on this PC (or a share) holding the server's media, for local preview. Empty = found automatically when the server is on this PC. */
   media?: string;
+  /** Names and overlays, by channel number. */
+  channels?: Record<string, ChannelCfg>;
 }
 
 /** One layer on one server. */
@@ -74,9 +101,9 @@ export interface Settings {
   web: { enabled: boolean; port: number; lan: boolean; code: string };
   http: { enabled: boolean; port: number };
   osc: { enabled: boolean; port: number };
-  countdown: { enabled: boolean; port: number; layer: number; caution: number; warn: number; flash: number };
+  /** The playback overlay's page, and when times turn amber, red and flash. */
+  countdown: { enabled: boolean; port: number; caution: number; warn: number; flash: number };
   oscOutputs: { name: string; host: string; port: number }[];
-  legacyConfig: string;
   recent: string[];
 }
 
@@ -93,9 +120,8 @@ export const DEFAULT_SETTINGS: Settings = {
   web: { enabled: true, port: 8126, lan: false, code: '' },
   http: { enabled: true, port: 8125 },
   osc: { enabled: true, port: 3250 },
-  countdown: { enabled: true, port: 8123, layer: 10, caution: 30, warn: 10, flash: 5 },
+  countdown: { enabled: true, port: 8123, caution: 30, warn: 10, flash: 5 },
   oscOutputs: [],
-  legacyConfig: '',
   recent: [],
 };
 
@@ -110,6 +136,8 @@ export interface LayerState {
   paused: boolean;
   loop: boolean;
   next: string;
+  /** A playback overlay of ours. */
+  overlay?: boolean;
 }
 
 export interface DeviceState {

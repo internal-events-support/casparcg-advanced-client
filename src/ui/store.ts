@@ -483,6 +483,22 @@ export async function execute(a: Action, id = [...store.sel].pop()): Promise<voi
   }
 }
 
+// ---- channels --------------------------------------------------------------------------------------------------
+export const channelName = (ch: number, device = ''): string => store.settings.devices.find((d) => d.name === (device || homeDevice()))?.channels?.[ch]?.name ?? '';
+/** "2 Stage", or just the number without a name. */
+export const channelText = (ch: number, device = ''): string => [String(ch), channelName(ch, device)].filter(Boolean).join(' ');
+/** "2-10 Stage". */
+export const spot = (ch: number, layer: number, device = ''): string => [`${ch}-${layer}`, channelName(ch, device)].filter(Boolean).join(' ');
+/** Every channel there is to choose, by number and name. `also` is kept in the list even if the server has fewer. */
+export function channelOptions(device = '', also: (number | undefined)[] = []): { value: string; label: string }[] {
+  const dev = device || homeDevice();
+  const n = store.state?.devices.find((d) => d.name === dev)?.channels.length ?? 0;
+  const named = Object.keys(store.settings.devices.find((d) => d.name === dev)?.channels ?? {}).map(Number);
+  const all = new Set([...Array(n || 8)].map((_, k) => k + 1));
+  for (const x of [...also, ...(n ? [] : named)]) if (x !== undefined && x > 0) all.add(x);
+  return [...all].sort((a, b) => a - b).map((x) => ({ value: String(x), label: channelText(x, dev) }));
+}
+
 // ---- media helpers ---------------------------------------------------------------------------------------------
 let mediaIx: { src: unknown; map: Map<string, MediaEntry> } = { src: null, map: new Map() };
 export function media(name: string, device = homeDevice()): MediaEntry | undefined {

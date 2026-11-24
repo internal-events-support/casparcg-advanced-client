@@ -3,7 +3,7 @@ import { isContainer, isPlaylist, tool, type Prop } from '../shared/tools';
 import type { Item } from '../shared/types';
 import { h, icon } from './kit';
 import { missing } from './relinkui';
-import { clock, fpsOf, itemSeconds, media, on, playlistOf, select, selected, store } from './store';
+import { channelText, clock, fpsOf, itemSeconds, media, on, playlistOf, select, selected, store } from './store';
 
 /** mm:ss, with hundredths when it is not a whole second. */
 const exact = (s: number) => { const c = Math.round(s * 100); return clock(Math.floor(c / 100)) + (c % 100 ? `.${String(c % 100).padStart(2, '0')}` : ''); };
@@ -76,7 +76,7 @@ export function buildInfo(): HTMLElement {
     const from = (Number(p.seek) || 0) / fpsOf(i);
     const whole = media(i.name, at.device || undefined)?.seconds ?? 0;
     const when = pl ? pl.items!.filter((x) => x.type === 'MOVIE').indexOf(i) : -1;
-    const spot = (c: unknown, l: unknown) => `Channel ${Number(c)}, layer ${Number(l)}`;
+    const spot = (c: unknown, l: unknown) => `Channel ${channelText(Number(c), i.device)}, layer ${Number(l)}`;
     section('', [
       i.type === 'CGTAKE' && row('From', spot(p.cgtfromchannel, p.cgtfromlayer)),
       i.type === 'CGTAKE' && row('To', spot(p.cgttochannel, p.cgttolayer)),
@@ -85,7 +85,7 @@ export function buildInfo(): HTMLElement {
       trimmed && !!secs && row('Part used', `${exact(from)} to ${exact(from + secs)} of ${exact(whole)}`),
       loops && row('Repeats', 'Until stopped'),
       pl ? row('Playlist', `${pl.label}, clip ${when + 1} of ${pl.items!.filter((x) => x.type === 'MOVIE').length}`) : null,
-      (out.has('channel') || pl) ? row('Output', `Channel ${at.channel}${out.has('layer') ? `, layer ${at.layer}` : ''}`) : null,
+      (out.has('channel') || pl) ? row('Output', `Channel ${channelText(at.channel, at.device)}${out.has('layer') ? `, layer ${at.layer}` : ''}`) : null,
       out.has('device') && store.settings.devices.length > 1 ? row('Server', at.device) : null,
       t.named && i.name !== i.label ? row('File', i.name) : null,
       !pl && row(t.cat === 'Mixer' ? 'Animation' : 'Transition', mix(p)),
@@ -100,7 +100,7 @@ export function buildInfo(): HTMLElement {
     ]);
 
     // Everything else that is set, in the tool's own words.
-    const rest = t.props.filter((x) => !SAID.has(x.key)).map((x) => { const v = value(x, p[x.key] ?? x.def); return row(x.label, v, x.kind === 'area' || v.length > 22); });
+    const rest = t.props.filter((x) => !SAID.has(x.key)).map((x) => { const v = x.key === 'fromchannel' ? channelText(Number(p[x.key] ?? x.def), i.device) : value(x, p[x.key] ?? x.def); return row(x.label, v, x.kind === 'area' || v.length > 22); });
     section('Settings', rest);
     if (isContainer(i)) contents(i);
     section('Remote', [i.allowRemote && row('Remote ID', i.remoteId), row('Story ID', i.storyId)]);

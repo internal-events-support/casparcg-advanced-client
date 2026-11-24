@@ -1,5 +1,5 @@
 // Shared test helpers: isolated CasparCG server, the real app, and a DevTools connection to drive it.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -13,7 +13,7 @@ export async function startServer(dir, media, channels) {
 	const p = (d) => path.join(dir, d).replace(/\\/g, '/') + '/'
 	const ch = '<channel><video-mode>720p5000</video-mode><consumers></consumers></channel>'
 	fs.writeFileSync(path.join(dir, 't.config'), `<?xml version="1.0" encoding="utf-8"?><configuration><paths><media-path>${media.replace(/\\/g, '/')}/</media-path><log-path disable="false">${p('log')}</log-path><data-path>${p('data')}</data-path><template-path>${p('template')}</template-path></paths><lock-clear-phrase>secret</lock-clear-phrase><html><cache-path>${p('cef')}</cache-path></html><channels>${channels ?? ch.repeat(4)}</channels><controllers><tcp><port>5350</port><protocol>AMCP</protocol></tcp></controllers><amcp><media-server><host>localhost</host><port>8000</port></media-server></amcp><osc><default-port>6350</default-port></osc></configuration>`)
-	const srv = spawn(path.join(CG, 'casparcg.exe'), [path.join(dir, 't.config')], { cwd: dir, stdio: 'ignore', detached: true })
+	const srv = spawn(path.join(CG, 'casparcg.exe'), [path.join(dir, 't.config')], { cwd: dir, stdio: 'ignore', windowsHide: true })
 	let sock
 	for (let i = 0; i < 80 && !sock; i++) {
 		sock = await new Promise((ok) => { const s = net.connect(5350, '127.0.0.1', () => ok(s)); s.on('error', () => ok(null)) })
@@ -31,7 +31,7 @@ export async function startServer(dir, media, channels) {
 		mark: () => fs.statSync(logFile()).size,
 		/** Commands the server received since `pos` (status polling left out). */
 		sent: (pos) => fs.readFileSync(logFile()).subarray(pos).toString('utf8').split('\n').filter((l) => /Received message/.test(l)).map((l) => l.replace(/.*Received message from [\d.]+: /, '').replace(/\\r\\n\s*$/, '').replace(/^REQ \S+ /, '').trim()).filter((l) => !/^(INFO|VERSION|CLS|TLS|DATA LIST|OSC SUB|THUMBNAIL)/.test(l)),
-		stop: async () => { sock.write('KILL\r\n'); await sleep(2500); try { process.kill(srv.pid) } catch {} },
+		stop: async () => { sock.write('KILL\r\n'); await sleep(2500); if (srv.exitCode === null) spawnSync('taskkill', ['/T', '/F', '/PID', String(srv.pid)], { windowsHide: true }) },
 	}
 }
 

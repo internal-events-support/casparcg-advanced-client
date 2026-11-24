@@ -7,13 +7,13 @@ import fs from 'node:fs';
 import type http from 'node:http';
 import path from 'node:path';
 import type { Seen } from '../shared/relink';
-import { newItem } from '../shared/tools';
-import { DEFAULT_SETTINGS, stem, uid, type Action, type AppState, type Doc, type DocPut, type DocSync, type Item, type Library, type Loc, type LogLine, type Settings } from '../shared/types';
+import { DEFAULT_OVERLAY, DEFAULT_SETTINGS, stem, uid, type Action, type AppState, type ChannelCfg, type Doc, type DocPut, type DocSync, type Item, type Library, type Loc, type LogLine, type Overlay, type Settings } from '../shared/types';
 import { parseRundown, writeRundown } from '../shared/xml';
-import { readLegacy, startCountdown, startHttp, startOsc, takeOpts, type ApiHooks } from './api';
+import { startHttp, startOsc, type ApiHooks } from './api';
 import { q } from './commands';
 import { Device } from './device';
 import { Engine, Refused } from './engine';
+import { pickMain, startOverlay, type OverlayView } from './overlay';
 import { Preview } from './preview';
 import { Runner } from './runner';
 import { addresses, Web, type Client, type WebHooks } from './web';
@@ -92,7 +92,7 @@ function syncDevices(): void {
     const d = new Device(c);
     devices.set(c.name, d);
     d.on('log', (dir: LogLine['dir'], text: string) => log(dir, c.name, text));
-    d.on('connected', () => { void refresh(c.name); void engine.resume(c.name); void findMedia(d); });
+    d.on('connected', () => { void refresh(c.name); void engine.resume(c.name); void findMedia(d); void showOverlays(d); });
   }
 }
 
@@ -179,7 +179,7 @@ function loc(ref: string): Loc | null {
 
 const hooks: ApiHooks = {
   loc,
-  transport: (t, v) => engine.run(() => engine.transport(t, v)),
+  transport: (t, v) => engine.run(async () => { const r = await engine.transport(t, v); if (v === 'stop') runner.forget(t.device, t.channel, t.layer); return r; }),
   take: (a, b, o) => engine.run(() => engine.take(a, b, o)),
   remoteItem: async (rid, a) => {
     const i = runner.byRemoteId(rid) ?? [...runner.docs.values()].flatMap((d) => flat(d.items)).find((x) => x.allowRemote && x.remoteId.toLowerCase() === rid.toLowerCase());
@@ -195,46 +195,89 @@ const hooks: ApiHooks = {
     if (['load', 'play', 'pause', 'stop', 'next', 'prev'].includes(verb)) return runner.execute(pl.id, verb as Action);
     throw new Refused(`Unknown playlist command ${verb}`);
   },
-  // The URLs of the earlier VT controller, so existing Companion buttons and rundowns keep working.
-  legacy: async (p) => {
-    const c = settings.legacyConfig ? readLegacy(settings.legacyConfig) : null;
-    const d = device(engine.home());
-    // The earlier controller called two particular channels PGM and PVW; its file says which.
-    const at = (b: string): Loc => ({ device: engine.home(), channel: (b === 'pgm' ? c?.pgm_channel : c?.pvw_channel) ?? 1, layer: c?.layer ?? 10 });
-    const t = at('pvw');
-    if (c && (p[0] === 'pgm' || p[0] === 'pvw') && p.length === 2) return hooks.transport(at(p[0]), p[1]);
-    if (c && p[0] === 'take' && p.length === 2 && ['cut', 'cutplay', 'fade', 'fadeplay'].includes(p[1])) return hooks.take(at('pvw'), at('pgm'), takeOpts(p[1], String(c.fade_frames ?? 25)));
-    if (p[0] === 'gfx') {
-      const ch = c?.gfx_channel ?? 4;
-      if (p[1] === 'clear') { for (const l of [20, 30]) await d?.cmd(`PLAY ${ch}-${l} #00000000 MIX 12`); return 'Graphics off'; }
-      const e = (p[1] === 'lt' || p[1] === 'rq') && c ? c[p[1]][Number(p[2]) - 1] : null;
-      if (!e) return null;
-      await d?.cmd(`PLAY ${ch}-${p[1] === 'lt' ? 20 : 30} ${q(e.file)}`);
-      return e.title;
-    }
-    if (p[0] === 'pvw' && p[1] === 'load' && c) {
-      if (p[2] === 'clip' && c.clips[Number(p[3]) - 1]) { await d?.cmd(`LOAD ${t.channel}-${t.layer} ${q(c.clips[Number(p[3]) - 1])}`); return `PVW: ${c.clips[Number(p[3]) - 1]}`; }
-      const pl = p[2] === 'playlist' ? c.playlists[p[3]] : null;
-      if (pl) {
-        const item = newItem('PLAYLIST', { id: `legacy-${p[3]}`, label: p[3], items: pl.clips.map((name, k) => newItem('MOVIE', { id: `legacy-${p[3]}-${k}`, name, label: name })), props: { cgloop: pl.loop ? 'Loop forever' : 'Stop on last' } });
-        await engine.run(() => engine.startPlaylist(item, Math.max(0, Number(p[4] ?? 1) - 1), false, t));
-        return `PVW: playlist ${p[3]}`;
-      }
-    }
-    return null;
+  overlay: async (ref, verb) => {
+    const t = loc(`${ref}-0`);
+    if (!t) return null;
+    const o = overlayOf(t.device, t.channel);
+    const on = verb === 'toggle' ? !(o.on && overlayOn(t.device, t.channel, o.layer)) : verb === 'show';
+    await setChannel(t.device, t.channel, { overlay: { on } });
+    return `Overlay on channel ${t.channel} ${on ? 'on' : 'off'}`;
   },
   status: () => ({ connected: !!device(engine.home())?.connected, layers: Object.fromEntries([...devices].flatMap(([n, d]) => [...d.layers()].filter(([, l]) => l.producer !== 'empty').map(([k, l]) => { const [c, y] = k.split('-').map(Number); const deck = engine.deckAt({ device: n, channel: c, layer: y }); return [n === engine.home() ? k : `${n}:${k}`, { ...l, playlist: deck?.label ?? null, index: deck ? deck.index + 1 : 0, count: deck?.count ?? 0 }]; }))) }),
-  countdown: (ch) => {
-    // The main layer when it has a clip; otherwise whichever layer does (lower thirds, cues): one still running first, then the top one.
-    const clips = [...(device(engine.home())?.layers() ?? [])].filter(([k, l]) => k.startsWith(`${ch}-`) && l.producer !== 'empty' && l.end > 0).map(([k, l]) => ({ n: Number(k.split('-')[1]), l }))
-      .sort((x, y) => Number(engine.ended(x.l)) - Number(engine.ended(y.l)) || y.n - x.n);
-    const main = clips.find((x) => x.n === settings.countdown.layer) ?? clips[0] ?? { n: settings.countdown.layer, l: engine.layer(engine.home(), ch, settings.countdown.layer) };
-    const layer = main.l;
-    const others = clips.filter((x) => x !== main && !engine.ended(x.l));
-    return { layer, at: main.n, others, next: layer.next ? layer.next.replace(/\\/g, '/').split('/').pop()! : '' };
-  },
   log: (k, t) => log(k, 'Remote', t),
 };
+// ---- playback overlays ---------------------------------------------------------------------------------
+const channelCfg = (dev: string, ch: number): ChannelCfg => settings.devices.find((d) => d.name === dev)?.channels?.[ch] ?? {};
+const overlayOf = (dev: string, ch: number): Overlay => ({ ...DEFAULT_OVERLAY, ...channelCfg(dev, ch).overlay });
+
+function overlayView(dev: string, ch: number): OverlayView | null {
+  const d = device(dev);
+  if (!d || !(ch > 0)) return null;
+  const o = overlayOf(dev, ch);
+  const from = o.follow || ch;
+  const clips = [...d.layers()].filter(([k, l]) => k.startsWith(`${from}-`) && l.producer !== 'empty' && l.end > 0).map(([k, l]) => ({ n: Number(k.split('-')[1]), l }));
+  // Nothing with a length: say so when something is there, such as a live source.
+  const still = [...d.layers()].filter(([k, l]) => k.startsWith(`${from}-`) && l.producer !== 'empty' && !l.overlay).map(([k, l]) => ({ n: Number(k.split('-')[1]), l })).sort((a, b) => a.n - b.n);
+  const main = pickMain(clips, o.main, (l) => engine.ended(l)) ?? still[0] ?? { n: o.main, l: engine.layer(dev, from, o.main) };
+  const name = o.title || channelCfg(dev, from).name || '';
+  return {
+    cfg: { title: name || String(from), small: name ? `CH ${from}` : 'CHANNEL', position: o.position, size: o.size, margin: o.margin, next: o.next, idle: o.idle },
+    main, others: o.others ? clips.filter((x) => x.n !== main.n && !engine.ended(x.l)) : [],
+  };
+}
+async function showOverlay(dev: string, ch: number): Promise<void> {
+  const d = device(dev);
+  if (!d) throw new Refused(`There is no server called ${dev}`);
+  if (!settings.countdown.enabled) throw new Refused('The playback overlay is off in Settings, Remote Control');
+  // The address this PC has on the way to the server, so the server can fetch the page.
+  const host = d.localAddress.includes(':') ? `[${d.localAddress}]` : d.localAddress;
+  await d.cmd(`PLAY ${ch}-${overlayOf(dev, ch).layer} [HTML] ${q(`http://${host}:${settings.countdown.port}/overlay?server=${encodeURIComponent(dev)}&ch=${ch}`)}`);
+}
+/** Is it there? Only ours is ever taken off. */
+const overlayOn = (dev: string, ch: number, layer: number) => !!device(dev)?.layers().get(`${ch}-${layer}`)?.overlay;
+
+/** After connecting to a server: put back overlays it has lost, for example because it was restarted. */
+async function showOverlays(d: Device): Promise<void> {
+  await new Promise((r) => setTimeout(r, 1500)); // let its status arrive first
+  for (const [k] of Object.entries(d.cfg.channels ?? {})) {
+    const ch = Number(k);
+    const o = overlayOf(d.cfg.name, ch);
+    if (!o.on || !d.connected || ch > d.channels.length || (d.layers().get(`${ch}-${o.layer}`)?.producer ?? 'empty') !== 'empty') continue;
+    await showOverlay(d.cfg.name, ch).catch(problem);
+  }
+}
+/** Change a channel's name or overlay. */
+async function setChannel(dev: string, ch: number, patch: ChannelCfg): Promise<void> {
+  const i = settings.devices.findIndex((d) => d.name === dev);
+  if (i < 0 || !Number.isInteger(ch) || ch < 1 || ch > 999) throw new Refused('There is no such channel');
+  const was = overlayOf(dev, ch);
+  const cfg: ChannelCfg = { ...channelCfg(dev, ch) };
+  if (patch.name !== undefined) cfg.name = String(patch.name).trim().slice(0, 40);
+  if (patch.overlay) cfg.overlay = cleanOverlay({ ...was, ...patch.overlay });
+  if (!cfg.name) delete cfg.name;
+  settings = { ...settings, devices: settings.devices.map((d, n) => (n === i ? { ...d, channels: { ...d.channels, [ch]: cfg } } : d)) };
+  saveSettings();
+  syncDevices();
+  tell('settings', settings);
+  settingsWin?.webContents.send('settings', settings);
+  if (!patch.overlay) return;
+  const o = overlayOf(dev, ch);
+  const d = device(dev);
+  if (!d?.connected) return;
+  if ((!o.on || o.layer !== was.layer) && overlayOn(dev, ch, was.layer)) await d.cmd(`CLEAR ${ch}-${was.layer}`);
+  if (o.on && (!was.on || o.layer !== was.layer || patch.overlay.on === true) && !overlayOn(dev, ch, o.layer)) {
+    if ((d.layers().get(`${ch}-${o.layer}`)?.producer ?? 'empty') !== 'empty') throw new Refused(`Layer ${o.layer} of channel ${ch} is in use. Choose another one for the overlay`);
+    await showOverlay(dev, ch);
+  }
+}
+function cleanOverlay(o: Overlay): Overlay {
+  const n = (v: unknown, min: number, max: number, def: number) => { const x = Math.round(Number(v)); return Number.isFinite(x) ? Math.min(max, Math.max(min, x)) : def; };
+  return {
+    on: !!o.on, layer: n(o.layer, 0, 9999, DEFAULT_OVERLAY.layer), follow: n(o.follow, 0, 999, 0), main: n(o.main, 0, 9999, 0), title: String(o.title ?? '').trim().slice(0, 40), position: o.position === 'top' ? 'top' : 'bottom',
+    size: n(o.size, 30, 250, 100), margin: n(o.margin, 0, 45, DEFAULT_OVERLAY.margin), others: !!o.others, next: !!o.next, idle: o.idle === 'hide' ? 'hide' : 'label',
+  };
+}
+
 const webHooks: WebHooks = {
   call: (c, name, args) => dispatch(c, name, args),
   state: () => state(),
@@ -254,7 +297,9 @@ function syncServices(): void {
   if (settings.web.enabled) webSrv = new Web(settings.web, webKey(), ROOT, webHooks, (s) => (services.web = s || `On, port ${settings.web.port}`));
   if (settings.http.enabled) httpSrv = startHttp(settings.http.port, hooks, (s) => (services.http = s || `On, port ${settings.http.port}`));
   if (settings.osc.enabled) oscSrv = startOsc(settings.osc.port, hooks, (s) => (services.osc = s || `On, port ${settings.osc.port}`));
-  if (settings.countdown.enabled) cdSrv = startCountdown(settings.countdown, hooks, (s) => (services.countdown = s || `On, port ${settings.countdown.port}`));
+  // A server on another computer has to be able to fetch the page.
+  const away = settings.devices.some((d) => !['127.0.0.1', 'localhost', '::1'].includes(d.host));
+  if (settings.countdown.enabled) cdSrv = startOverlay(settings.countdown.port, away ? '0.0.0.0' : '127.0.0.1', path.join(ROOT, 'static', 'overlay.html'), () => settings.countdown, overlayView, (s) => (services.countdown = s || `On, port ${settings.countdown.port}`));
 }
 
 // ---- state to the window --------------------------------------------------------------------------------
@@ -335,7 +380,7 @@ function checkSettings(c: Client, patch: Partial<Settings>): void {
   if (c.local) return;
   const differs = (k: keyof Settings) => k in patch && JSON.stringify(patch[k]) !== JSON.stringify(settings[k]);
   const folders = (l: Settings['devices']) => l.filter((d) => d.media).map((d) => JSON.stringify([d.name, d.media]));
-  if (differs('allowShell') || differs('ffmpeg') || differs('web') || differs('legacyConfig') || (patch.devices && folders(patch.devices).some((x) => !folders(settings.devices).includes(x)))) throw new Refused('That can only be changed on the show PC');
+  if (differs('allowShell') || differs('ffmpeg') || differs('web') || (patch.devices && folders(patch.devices).some((x) => !folders(settings.devices).includes(x)))) throw new Refused('That can only be changed on the show PC');
 }
 /** Folders a browser may open rundowns from and save them to: the ones already in use here. */
 function rundownDirs(): string[] {
@@ -376,7 +421,14 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
   previewCancel: () => preview.cancel(who().id),
   refresh: (n: string) => refresh(n),
   thumb: async (n: string, name: string) => (device(n)?.connected ? device(n)!.thumbnail(name).catch(() => '') : ''),
-  raw: async (n: string, cmd: string) => { const r = await device(n)?.cmd(cmd); return r ? r.lines : []; },
+  raw: async (n: string, cmd: string) => {
+    const r = await device(n)?.cmd(cmd);
+    const m = /^\s*CLEAR\s+(\d+)(?:-(\d+))?\s*$/i.exec(cmd);
+    if (m) runner.forget(n, Number(m[1]), m[2] === undefined ? null : Number(m[2]));
+    return r ? r.lines : [];
+  },
+  clearChannel: async (n: string, ch: number) => { await device(n)?.cmd(`CLEAR ${Math.round(ch)}`); runner.forget(n, Math.round(ch), null); },
+  channel: (n: string, ch: number, patch: ChannelCfg) => setChannel(n, ch, patch),
   dataStore: async (n: string, key: string, value: string) => { await device(n)?.cmd(`DATA STORE ${q(key)} ${q(value)}`); await refresh(n); },
   dataRead: async (n: string, key: string) => (await device(n)?.cmd(`DATA RETRIEVE ${q(key)}`))?.lines[0] ?? '',
   dataRemove: async (n: string, key: string) => { await device(n)?.cmd(`DATA REMOVE ${q(key)}`); await refresh(n); },
@@ -424,10 +476,15 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
       patch.web = { ...patch.web, code };
     }
     const svc = JSON.stringify([settings.http, settings.osc, settings.countdown, settings.web]);
+    // Names and overlays are changed one channel at a time; a list of servers read earlier must not undo that.
+    if (patch.devices) patch.devices = patch.devices.map((d, n) => { const was = settings.devices.find((x) => x.name === d.name) ?? (patch.devices!.length === settings.devices.length ? settings.devices[n] : undefined); return { ...d, channels: was?.channels ?? {} }; });
+    const at = [settings.countdown.enabled, settings.countdown.port].join();
+    const away = settings.devices.map((d) => d.host).join();
     settings = { ...settings, ...patch };
     saveSettings();
     syncDevices();
-    if (JSON.stringify([settings.http, settings.osc, settings.countdown, settings.web]) !== svc) syncServices();
+    if (JSON.stringify([settings.http, settings.osc, settings.countdown, settings.web]) !== svc || settings.devices.map((d) => d.host).join() !== away) syncServices();
+    if ([settings.countdown.enabled, settings.countdown.port].join() !== at) for (const [n, d] of devices) for (const k of Object.keys(d.cfg.channels ?? {})) if (overlayOn(n, Number(k), overlayOf(n, Number(k)).layer)) void (settings.countdown.enabled ? showOverlay(n, Number(k)) : d.cmd(`CLEAR ${k}-${overlayOf(n, Number(k)).layer}`)).catch(problem);
     tell('settings', settings);
     settingsWin?.webContents.send('settings', settings);
     return settings;
@@ -441,7 +498,6 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
   deviceStates: () => state().devices,
   browseFolder: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { properties: ['openDirectory'] }); return r.filePaths[0] ?? ''; },
   browseExe: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { title: 'Choose ffmpeg.exe', filters: [{ name: 'ffmpeg', extensions: ['exe'] }], properties: ['openFile'] }); return r.filePaths[0] ?? ''; },
-  browse: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { filters: [{ name: 'JSON', extensions: ['json'] }], properties: ['openFile'] }); return r.filePaths[0] ?? ''; },
   quit: () => { quitting = true; app.quit(); },
   hide: () => win?.hide(),
 };
@@ -452,7 +508,7 @@ const store = (doc: Doc, f: string) => {
   return { path: f, name: path.basename(f).replace(/\.xml$/i, '') };
 };
 /** Needs a window on this PC, so not for a browser. */
-const PC_ONLY = new Set(['open', 'browseFolder', 'browseExe', 'browse', 'webOpen', 'openSettings', 'quit', 'hide']);
+const PC_ONLY = new Set(['open', 'browseFolder', 'browseExe', 'webOpen', 'openSettings', 'quit', 'hide']);
 
 async function dispatch(c: Client, name: string, args: unknown[]): Promise<{ ok: boolean; value?: unknown; error?: string }> {
   const h = Object.hasOwn(handlers, name) ? (handlers[name] as (...a: unknown[]) => unknown) : undefined;

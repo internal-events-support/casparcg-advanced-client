@@ -4,7 +4,7 @@ import { stem, type Action, type Doc, type Item } from '../shared/types';
 import { button, confirmSheet, h, icon, iconButton, menu, promptSheet, type MenuItem } from './kit';
 import { DRAG, dragItems } from './library';
 import { missing, missingItems, relinkSheet } from './relinkui';
-import { activate, applyTemplate, call, canHold, clock, copy, copyTemplate, doc, duplicate, hasTemplate, edit, emit, execute, homeDevice, insert, itemSeconds, moveItems, mutate, newDoc, on, openFiles, openPath, paste, removeSelected, save, select, selected, selectedTop, store, toast, ungroup, visible, touch, vt, download, wrap, type Spot } from './store';
+import { activate, applyTemplate, call, canHold, clock, copy, copyTemplate, doc, duplicate, hasTemplate, edit, emit, execute, homeDevice, insert, itemSeconds, moveItems, mutate, newDoc, on, openFiles, openPath, paste, removeSelected, save, select, selected, selectedTop, store, toast, ungroup, visible, channelText, spot, touch, vt, download, wrap, type Spot } from './store';
 
 const MOVE = 'application/x-vt-move';
 export const COLORS = ['', '#8c3a3a', '#a0522d', '#b8922f', '#6b8e23', '#2e8b57', '#2f7f8f', '#4673c3', '#6a4fa3', '#a0478f', '#555555'];
@@ -85,40 +85,25 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
   };
   B.prev.el.title = 'Previous clip (Shift+F5)';
   const more = button(h('span.tb-in', icon('chevronDown')), () => menu(more, [
-    { label: 'Clear layer (F11)', onClick: () => void execute('clearLayer') },
-    { label: 'Clear channel (F12)', destructive: true, onClick: () => void (async () => { if (!store.settings.confirmClear || await confirmSheet('Clear the whole channel?', 'Everything on this channel goes off air.', 'Clear', true)) await execute('clearChannel'); })() },
-  ]), 'tb slim', 'More ways to clear');
+    { label: 'Mark everything as unused', icon: 'check', onClick: () => { const d = doc(); if (d) void call('used', withInside(d.items).map((x) => x.id), false); } }, null,
+    { label: 'Clear layer (F11)', disabled: B.clear.el.disabled, onClick: () => void execute('clearLayer') },
+    { label: 'Clear channel (F12)', destructive: true, disabled: B.clear.el.disabled, onClick: () => void (async () => { if (!store.settings.confirmClear || await confirmSheet('Clear the whole channel?', 'Everything on this channel goes off air.', 'Clear', true)) await execute('clearChannel'); })() },
+  ]), 'tb slim', 'More');
   const tpl = h('span.tb-set', B.update.el, B.invoke.el);
+  // Whether everything selected has been marked, so the button does the other thing.
+  const markedAll = () => { const ids = withInside(selected()).map((x) => x.id); return ids.length > 0 && ids.every((id) => store.state?.items[id]?.used); };
+  const usedText = h('span.tb-t', 'Used');
+  const used = button(h('span.tb-in', icon('check'), h('span.tb-l', usedText, h('kbd', 'U'))), () => markUsed(), 'tb', 'Mark as used or unused (U)');
   const skips = h('span.tb-set', B.prev.el, B.back.el, B.fwd.el, B.next.el);
-  // Edit has its own buttons: what you do to entries rather than what they do on the server.
-  const eb = (label: string, ic: string, fn: () => void, tip: string, key = '') => button(h('span.tb-in', icon(ic), h('span.tb-l', h('span.tb-t', label), key ? h('kbd', key) : null)), fn, 'tb', tip);
-  const E = {
-    dup: eb('Duplicate', 'copy', () => duplicate(), 'Duplicate (Ctrl+D)'), del: eb('Delete', 'trash', () => removeSelected(), 'Delete (Del)'),
-    list: eb('Playlist', 'playlist', () => wrap('PLAYLIST'), 'Put the selected videos in a playlist (Ctrl+P)'), group: eb('Group', 'folder', () => wrap('GROUP'), 'Group the selection (Ctrl+G)'), un: eb('Ungroup', 'layers', () => ungroup(), 'Take the entries out again (Ctrl+Shift+G)'),
-    copyT: eb('Copy template', 'template2', () => copyTemplate(), 'Copy this entry’s settings (Ctrl+Shift+C)'), applyT: eb('Apply', 'apply', () => applyTemplate(), 'Apply the copied template (Ctrl+Shift+V)'),
-  };
   const big = h('span.rd-big');
   const what = h('div.rd-now', nowIcon, h('div.rd-now-t', nowName, nowSub));
   const bar = show
-    ? h('div.rd-bar', what, big, h('span.tb-set.main', B.stop.el, B.play.el, B.load.el, B.pause.el), skips, tpl, h('span.tb-set', B.clear.el, more))
-    : h('div.rd-bar', what, h('span.tb-set', E.dup, E.del), h('span.tb-set', E.list, E.group, E.un), h('span.tb-set', E.copyT, E.applyT));
-  function paintEdit(): void {
-    const s = selected();
-    const real = s.filter((x) => x.type !== 'SEPARATOR');
-    const top = selectedTop();
-    const set = (el: HTMLButtonElement, v: boolean) => { if (el.disabled === v) el.disabled = !v; };
-    set(E.dup, s.length > 0); set(E.del, s.length > 0);
-    set(E.list, top.some((x) => x.type === 'MOVIE')); set(E.group, top.some((x) => !isContainer(x) && x.type !== 'SEPARATOR'));
-    const box = top.some(isContainer);
-    if (E.un.hidden === box) E.un.hidden = !box;
-    set(E.copyT, real.length === 1 && s.length === 1); set(E.applyT, !!hasTemplate() && real.length > 0);
-  }
-
+    ? h('div.rd-bar', what, big, h('span.tb-set.main', B.stop.el, B.play.el, B.load.el, B.pause.el), skips, tpl, h('span.tb-set', used, B.clear.el, more))
+    : h('div.rd-bar', what);
   const PLAYS = ['MOVIE', 'AUDIO'];
   const canLoad = (i: Item) => (tool(i.type).out.includes('layer') || i.type === 'GROUP') && i.type !== 'CGTAKE' && tool(i.type).cat !== 'Mixer';
   function paintBar(): void {
     if (root.hidden) return;
-    if (!show) paintEdit();
     const d = doc();
     const id = [...store.sel].pop();
     const f = d && id ? findItem(d.items, id) : null;
@@ -137,7 +122,11 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
     set(B.next, live && (!!pl || i!.type === 'TEMPLATE' || !!i!.props.triggeronnext || !!grp?.props.autoplay || !!f!.parent?.props.autoplay));
     const isTpl = i?.type === 'TEMPLATE';
     if (tpl.hidden === isTpl) tpl.hidden = !isTpl;
-    set(B.clear, layered); more.disabled = !layered;
+    set(B.clear, layered);
+    const marks = withInside(selected()).length > 0;
+    if (used.disabled === marks) used.disabled = !marks;
+    const uw = markedAll() ? 'Unused' : 'Used';
+    if (usedText.textContent !== uw) usedText.textContent = uw;
     const st = i ? store.state?.items[i.id]?.state ?? '' : '';
     const word = st === 'paused' ? 'Resume' : 'Pause';
     if (B.pause.text.textContent !== word) B.pause.text.textContent = word;
@@ -145,7 +134,7 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
     for (const [x, s] of [[B.back, '−'], [B.fwd, '+']] as const) { const w = `${s}${skip()} s`; if (x.text.textContent !== w) { x.text.textContent = w; x.el.title = s === '−' ? `Back ${skip()} seconds (Alt+Left)` : `Forward ${skip()} seconds (Alt+Right)`; } }
     const n = store.sel.size;
     const name = n > 1 ? (show ? `${i?.label ?? ''} and ${n - 1} more` : `${n} selected`) : i ? i.label || t!.label : 'Nothing selected';
-    const where = !i ? (show ? 'Select an entry to play it' : 'Select an entry to change it') : n > 1 && !show ? 'Changes apply to all of them' : [t!.label, layered && !grp ? (() => { const dk = pl ? store.state?.decks.find((x) => x.playlistId === pl.id) : undefined; return dk ? `${dk.channel}-${dk.layer}` : pl ? `${pl.channel}-${pl.layer}` : `${i.channel}-${i.layer}`; })() : ''].filter(Boolean).join('  ·  ');
+    const where = !i ? (show ? 'Select an entry to play it' : 'Select an entry to change it') : n > 1 && !show ? 'Changes apply to all of them' : [t!.label, layered && !grp ? (() => { const dk = pl ? store.state?.decks.find((x) => x.playlistId === pl.id) : undefined; const at = dk ?? pl ?? i; return spot(at.channel, at.layer, at.device); })() : ''].filter(Boolean).join('  ·  ');
     if (nowName.textContent !== name) nowName.textContent = name;
     if (nowSub.textContent !== where) nowSub.textContent = where;
     if (show) {
@@ -169,22 +158,23 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
 
   root.append(head, bar, list);
 
+  const takeText = (i: Item) => `${spot(Number(i.props.cgtfromchannel), Number(i.props.cgtfromlayer), i.device)} to ${spot(Number(i.props.cgttochannel), Number(i.props.cgttolayer), i.device)}`;
   // ---- rows ---------------------------------------------------------------------------------------------
   function sub(i: Item, parent: Item | null): string {
     const t = tool(i.type);
     if (show && !isContainer(i)) {
       // On the night: where it goes and how long it is.
       const s = itemSeconds(i);
-      return [parent && isPlaylist(parent) ? '' : t.out.includes('layer') ? `${i.channel}-${i.layer}` : '', s ? clock(s) : '', i.type === 'CGTAKE' ? `${i.props.cgtfromchannel}-${i.props.cgtfromlayer} to ${i.props.cgttochannel}-${i.props.cgttolayer}, ${String(i.props.cgtmode).toLowerCase()}${i.props.cgtroll ? ' and play' : ''}` : ''].filter(Boolean).join('  ·  ');
+      return [parent && isPlaylist(parent) ? '' : t.out.includes('layer') ? spot(i.channel, i.layer, i.device) : '', s ? clock(s) : '', i.type === 'CGTAKE' ? `${takeText(i)}, ${String(i.props.cgtmode).toLowerCase()}${i.props.cgtroll ? ' and play' : ''}` : ''].filter(Boolean).join('  ·  ');
     }
-    if (i.type === 'PLAYLIST') return `${i.channel}-${i.layer}  ·  ${(i.items ?? []).length} clips  ·  ${clock((i.items ?? []).reduce((a, x) => a + itemSeconds(x), 0))}`;
+    if (i.type === 'PLAYLIST') return `${spot(i.channel, i.layer, i.device)}  ·  ${(i.items ?? []).length} clips  ·  ${clock((i.items ?? []).reduce((a, x) => a + itemSeconds(x), 0))}`;
     if (i.type === 'GROUP') { const s = groupLength(i); return `${(i.items ?? []).length} items${s ? `  ·  ${clock(s)}` : ''}`; }
     const p: string[] = [];
     if (parent && isPlaylist(parent)) { const s = itemSeconds(i); return s ? clock(s) : i.name; }
-    if (t.out.includes('channel')) p.push(t.out.includes('layer') ? `${i.channel}-${i.layer}` : `Channel ${i.channel}`);
+    if (t.out.includes('channel')) p.push(t.out.includes('layer') ? spot(i.channel, i.layer, i.device) : `Channel ${channelText(i.channel, i.device)}`);
     if (t.named && i.name !== i.label) p.push(i.name);
     if (!t.named && ['HTTPGET', 'HTTPPOST', 'HTML'].includes(i.type)) p.push(String(i.props.url || 'No URL'));
-    if (i.type === 'CGTAKE') p.push(`${i.props.cgtfromchannel}-${i.props.cgtfromlayer} to ${i.props.cgttochannel}-${i.props.cgttolayer}`, `${i.props.cgtmode}${i.props.cgtmode === 'Fade' ? ` ${i.props.cgtframes}` : ''}${i.props.cgtroll ? ', play' : ''}`);
+    if (i.type === 'CGTAKE') p.push(takeText(i), `${i.props.cgtmode}${i.props.cgtmode === 'Fade' ? ` ${i.props.cgtframes}` : ''}${i.props.cgtroll ? ', play' : ''}`);
     if (i.type === 'SHELL') p.push(String(i.props.cgshell || 'No command').split('\n')[0]);
     if (i.type === 'CUSTOMCOMMAND') p.push(String(i.props.playCommand || 'No command'));
     if (i.delay > 0) p.push(`Delay ${i.delay} ms`);
@@ -277,7 +267,7 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
     const act = (label: string, a: Action, ic: string): MenuItem => ({ label, icon: ic, onClick: () => void execute(a, i.id) });
     if (show) {
       menu({ x: e.clientX, y: e.clientY }, [act('Play', 'play', 'play'), ...(canLoad(i) ? [act('Load', 'load', 'cue')] : []), act('Stop', 'stop', 'stop'), ...(isPlaylist(i) ? [act('Previous clip', 'prev', 'prev'), act('Next clip', 'next', 'next')] : []), null,
-        { label: 'Mark as used', onClick: () => void call('used', ids, true) }, { label: 'Mark as unused', onClick: () => void call('used', ids, false) }]);
+        { label: markedAll() ? 'Mark as unused' : 'Mark as used', icon: 'check', onClick: () => markUsed() }]);
       return;
     }
     const at = (findItem(doc()?.items ?? [], i.id)?.parent?.items ?? doc()?.items ?? []).indexOf(i);
@@ -287,13 +277,12 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
       ...(touch && one ? [{ label: 'Move up', disabled: at <= 0, onClick: () => moveItems([i.id], { parent: inside, index: at - 1 }) }, { label: 'Move down', disabled: at >= last, onClick: () => moveItems([i.id], { parent: inside, index: at + 2 }) }, null] : []),
       act('Play', 'play', 'play'), act('Load', 'load', 'cue'), act('Stop', 'stop', 'stop'),
       ...(isPlaylist(i) ? [act('Previous clip', 'prev', 'prev'), act('Next clip', 'next', 'next')] : []), null,
-      { label: 'Copy', icon: 'copy', onClick: () => copy() }, { label: 'Cut', onClick: () => copy(true) }, { label: 'Paste', onClick: () => paste() }, { label: 'Duplicate', onClick: () => duplicate() }, null,
+      { label: 'Copy', icon: 'copy', onClick: () => copy() }, { label: 'Cut', icon: 'scissors', onClick: () => copy(true) }, { label: 'Paste', icon: 'paste', onClick: () => paste() }, { label: 'Duplicate', icon: 'duplicate', onClick: () => duplicate() }, null,
       { label: 'Copy template (Ctrl+Shift+C)', icon: 'template2', onClick: () => copyTemplate() }, ...(hasTemplate() ? [{ label: `Apply template from ${hasTemplate()!.label}`, icon: 'apply', onClick: () => applyTemplate() }] : []),
       ...(tool(i.type).named ? [{ label: missing(i) ? 'Find missing clip…' : 'Replace clip…', icon: 'search', onClick: () => void relinkSheet(missing(i) ? selected().filter(missing) : [i], !missing(i)) }] : []), null,
       { label: 'Make playlist', icon: 'playlist', onClick: () => wrap('PLAYLIST') }, { label: 'Group', icon: 'folder', onClick: () => wrap('GROUP') },
-      ...(isContainer(i) ? [{ label: 'Ungroup', onClick: () => ungroup() }] : []), null,
-      { label: 'Colour…', icon: 'palette', onClick: () => colour(e, ids) },
-      { label: 'Mark as used', onClick: () => void call('used', ids, true) }, { label: 'Mark as unused', onClick: () => void call('used', ids, false) }, null,
+      ...(isContainer(i) ? [{ label: 'Ungroup', icon: 'layers', onClick: () => ungroup() }] : []), null,
+      { label: 'Colour…', icon: 'palette', onClick: () => colour(e, ids) }, null,
       { label: one ? 'Delete' : `Delete ${ids.length} items`, icon: 'trash', destructive: true, onClick: () => removeSelected() },
     ]);
   }
@@ -355,7 +344,7 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
         if (deck) {
           t = `${deck.index + 1}/${deck.count}  ${t}`;
           // Say where it is once it has been taken somewhere else.
-          if (deck.channel !== i.channel || deck.layer !== i.layer) extra = `on ${deck.channel}-${deck.layer}`;
+          if (deck.channel !== i.channel || deck.layer !== i.layer) extra = `on ${spot(deck.channel, deck.layer, deck.device)}`;
         }
       } else if (r.parent && isPlaylist(r.parent) && s.decks.some((d) => { const n = d.manual && s.items[d.playlistId]?.state ? (d.index + 1 < d.count ? d.index + 1 : d.loop ? 0 : null) : d.queued; return d.playlistId === r.parent!.id && n !== null && n !== d.index && r.parent!.items!.filter((x) => x.type === 'MOVIE')[n]?.id === i.id; })) badge = 'next';
       const left = isContainer(i) ? timeLeft(i) : null;
@@ -431,6 +420,13 @@ export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => u
   return root;
 }
 
+/** Entries, with what is in the groups and playlists among them. */
+const withInside = (l: Item[]): Item[] => [...new Set(l.flatMap((i) => [i, ...(i.items ?? [])]))].filter((i) => i.type !== 'SEPARATOR');
+/** Mark what is selected as used or unused; without saying which, the other way from how it is. */
+export function markUsed(): void {
+  const ids = withInside(selected()).map((i) => i.id);
+  if (ids.length) void call('used', ids, !ids.every((id) => store.state?.items[id]?.used));
+}
 /** How long a group runs: one after another with auto play, otherwise as long as its longest clip. */
 function groupLength(g: Item): number {
   const s = (g.items ?? []).filter((i) => i.type === 'MOVIE' || i.type === 'AUDIO').map(itemSeconds);
