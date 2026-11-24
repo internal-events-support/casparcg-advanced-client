@@ -1,4 +1,4 @@
-// Settings window (same layout as GMeet ISO's): sidebar plus grouped rows. Every control saves straight away.
+// Settings window (same layout as Google Meet ISO's): sidebar plus grouped rows. Every control saves straight away.
 import type { DeviceState, Settings } from '../shared/types';
 import { h, icon, iconButton, popup, toggle, type Child } from './kit';
 import { toast, vt } from './store';

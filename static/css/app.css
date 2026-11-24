@@ -1,4 +1,4 @@
-/* Caspar VT layout. Colours, controls and cards come from tokens.css (shared with GMeet ISO). */
+/* CasparCG Advanced Client layout. Colours, controls and cards come from tokens.css (shared with Google Meet ISO). */
 .spacer { flex: 1; }
 .kbtn { display: inline-flex; align-items: center; gap: 6px; }
 .kbtn .ico { width: 13px; height: 13px; }

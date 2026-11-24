@@ -13,14 +13,20 @@ import { startHttp, startOsc, type ApiHooks } from './api';
 import { q } from './commands';
 import { Device } from './device';
 import { Engine, Refused } from './engine';
+import { carryOver, OLD_FOLDER } from './migrate';
 import { pickMain, startOverlay, type OverlayView } from './overlay';
 import { Preview } from './preview';
 import { Runner } from './runner';
 import { addresses, Web, type Client, type WebHooks } from './web';
 
-if (process.env.CASPARVT_USERDATA) app.setPath('userData', process.env.CASPARVT_USERDATA);
-else app.setPath('userData', path.join(app.getPath('appData'), 'Caspar VT'));
+const ownFolder = process.env.CASPARCG_ADVANCED_USERDATA;
+app.setPath('userData', ownFolder || path.join(app.getPath('appData'), 'CasparCG Advanced Client'));
 if (!app.requestSingleInstanceLock()) app.quit();
+else if (!ownFolder) {
+  const old = path.join(app.getPath('appData'), OLD_FOLDER);
+  const failed = carryOver(old, app.getPath('userData'));
+  if (failed.length) dialog.showErrorBox('CasparCG Advanced Client', `These could not be copied from ${old}: ${failed.join(', ')}`);
+}
 
 const ROOT = path.join(__dirname, '..', '..');
 const ud = (f: string) => path.join(app.getPath('userData'), f);
@@ -529,7 +535,7 @@ function guard(w: BrowserWindow): void {
 function openMain(): void {
   if (win) { win.show(); win.focus(); return; }
   win = new BrowserWindow({
-    width: 1560, height: 960, minWidth: 1180, minHeight: 700, title: 'CasparCG Client', icon: ICON, backgroundColor: '#1e1e1e',
+    width: 1560, height: 960, minWidth: 1180, minHeight: 700, title: 'CasparCG Advanced Client', icon: ICON, backgroundColor: '#1e1e1e',
     titleBarStyle: 'hidden', titleBarOverlay: { color: '#383838', symbolColor: '#e8e8e8', height: 48 }, webPreferences: { ...web(), backgroundThrottling: false },
   });
   win.setMenuBarVisibility(false);
@@ -586,9 +592,9 @@ void app.whenReady().then(() => {
   openMain();
   if (fs.existsSync(ICON)) {
     tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
-    tray.setToolTip('CasparCG Client');
+    tray.setToolTip('CasparCG Advanced Client');
     tray.on('click', openMain);
-    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Show CasparCG Client', click: openMain }, { type: 'separator' }, { label: 'Quit', click: () => { quitting = true; app.quit(); } }]));
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Show CasparCG Advanced Client', click: openMain }, { type: 'separator' }, { label: 'Quit', click: () => { quitting = true; app.quit(); } }]));
   }
   setInterval(() => void watchMedia().catch(() => undefined), 8000);
   setInterval(() => { if (win?.isVisible()) win.webContents.send('state', state()); }, 66);

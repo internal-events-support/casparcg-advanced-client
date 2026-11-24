@@ -53,8 +53,8 @@ jobs:
       - name: Check the built app starts
         shell: pwsh
         run: |
-          $env:CASPARVT_USERDATA = "$env:RUNNER_TEMP\ud"
-          $p = Start-Process "release\win-unpacked\CasparCG Client.exe" -PassThru
+          $env:CASPARCG_ADVANCED_USERDATA = "$env:RUNNER_TEMP\ud"
+          $p = Start-Process "release\win-unpacked\CasparCG Advanced Client.exe" -PassThru
           $ok = $false
           foreach ($i in 1..40) {
             Start-Sleep 1
@@ -62,7 +62,7 @@ jobs:
               $page = (Invoke-WebRequest http://127.0.0.1:8126/ -UseBasicParsing -TimeoutSec 2).Content
               foreach ($f in 'web.js', 'ui/app.js', 'ui/settings.js', 'settings', 'web.css', 'css/app.css') { $js = (Invoke-WebRequest "http://127.0.0.1:8126/$f" -UseBasicParsing -TimeoutSec 2).StatusCode }
               $st = (Invoke-WebRequest http://127.0.0.1:8125/status -UseBasicParsing -TimeoutSec 2).Content
-              if ($page -match 'CasparCG Client' -and $js -eq 200 -and $st -match '"connected":false') { $ok = $true; break }
+              if ($page -match 'CasparCG Advanced Client' -and $js -eq 200 -and $st -match '"connected":false') { $ok = $true; break }
             } catch { }
           }
           if ($p.HasExited) { throw "The app exited with $($p.ExitCode)" }
@@ -73,7 +73,7 @@ jobs:
         if: env.TAG == ''
         uses: actions/upload-artifact@v7
         with:
-          name: CasparCG-Client-trial
+          name: CasparCG-Advanced-Client-trial
           path: release/*.exe
           retention-days: 7
 
@@ -87,5 +87,5 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release/*.exe --clobber
           else
-            gh release create "$TAG" release/*.exe --verify-tag --title "CasparCG Client $TAG" --generate-notes
+            gh release create "$TAG" release/*.exe --verify-tag --title "CasparCG Advanced Client $TAG" --generate-notes
           fi

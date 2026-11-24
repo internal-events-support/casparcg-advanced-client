@@ -47,7 +47,7 @@ function topBar(): HTMLElement {
   nav = segmented([{ value: 'edit', label: 'Edit' }, { value: 'show', label: 'Show' }, { value: 'channels', label: 'Channels' }, { value: 'activity', label: 'Activity' }], tab, (v) => showTab(v as Tab));
   const settings = h('button.btn.pill.settings-btn', icon('gear'), h('span', 'Settings')) as HTMLButtonElement;
   settings.addEventListener('click', openSettings);
-  return h('header.topbar', h('div.left', h('span.app-title', 'CasparCG Client')), h('div.center', nav.el), h('div.right', settings));
+  return h('header.topbar', h('div.left', h('span.app-title', 'CasparCG Advanced Client')), h('div.center', nav.el), h('div.right', settings));
 }
 
 /** In a browser the settings open over the page; in the app they have their own window. */
@@ -245,7 +245,7 @@ async function askQuit(playing: string[]): Promise<void> {
     playing.length ? `${playing.join(', ')} ${playing.length > 1 ? 'are' : 'is'} playing. If you quit, ${playing.length > 1 ? 'each stops' : 'it stops'} after the clip that is already queued.` : '',
     dirty.length ? `${dirty.map((d) => d.name).join(', ')} ${dirty.length > 1 ? 'have' : 'has'} unsaved changes. They are kept and reopen next time.` : '',
   ].filter(Boolean);
-  const layer = h('div.sheet-layer', h('div.sheet.wide', h('h3', playing.length ? 'A playlist is on air' : 'Quit CasparCG Client?'), ...parts.map((p) => h('p', p)),
+  const layer = h('div.sheet-layer', h('div.sheet.wide', h('h3', playing.length ? 'A playlist is on air' : 'Quit CasparCG Advanced Client?'), ...parts.map((p) => h('p', p)),
     h('div.actions', button('Cancel', done), playing.length ? button('Keep running hidden', () => { done(); void call('hide'); }, 'primary') : null, button('Quit', () => { done(); void call('quit'); }, playing.length ? 'danger' : 'primary'))));
   document.body.append(layer);
 }

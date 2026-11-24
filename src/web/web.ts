@@ -33,7 +33,7 @@ function login(msg = ''): void {
   const b = el('button', 'primary', 'Connect');
   b.addEventListener('click', () => void go());
   const box = el('div', 'login');
-  box.append(el('h1', '', 'CasparCG Client'), el('p', '', 'Enter the access code from Settings, Web Interface'), i, bad, b);
+  box.append(el('h1', '', 'CasparCG Advanced Client'), el('p', '', 'Enter the access code from Settings, Web Interface'), i, bad, b);
   const layer = el('div', 'login-layer');
   layer.append(box);
   document.body.append(layer);

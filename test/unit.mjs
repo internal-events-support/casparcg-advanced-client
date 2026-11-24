@@ -7,13 +7,14 @@ import { pathToFileURL } from 'node:url'
 import { ROOT, checker } from './lib.mjs'
 
 const out = path.join(ROOT, 'dist/test')
-for (const f of ['shared/xml', 'shared/tools', 'shared/merge', 'main/commands', 'main/osc']) execFileSync(process.execPath, [path.join(ROOT, 'node_modules/esbuild/bin/esbuild'), path.join(ROOT, `src/${f}.ts`), '--bundle', '--platform=node', '--format=esm', `--outfile=${path.join(out, path.basename(f))}.mjs`, '--log-level=error'])
+for (const f of ['shared/xml', 'shared/tools', 'shared/merge', 'main/commands', 'main/osc', 'main/migrate']) execFileSync(process.execPath, [path.join(ROOT, 'node_modules/esbuild/bin/esbuild'), path.join(ROOT, `src/${f}.ts`), '--bundle', '--platform=node', '--format=esm', `--outfile=${path.join(out, path.basename(f))}.mjs`, '--log-level=error'])
 const imp = (n) => import(pathToFileURL(path.join(out, n + '.mjs')))
 const { parseRundown, writeRundown } = await imp('xml')
 const { TOOLS, newItem } = await imp('tools')
 const { commandsFor, qChecksum } = await imp('commands')
 const osc = await imp('osc')
 const { mergeItems, mergeDoc } = await imp('merge')
+const { carryOver } = await imp('migrate')
 const c = checker()
 const strip = (x) => JSON.parse(JSON.stringify(x, (k, v) => (k === 'id' ? undefined : v)))
 
@@ -35,6 +36,30 @@ if (fs.existsSync(desk)) { const d = parseRundown(fs.readFileSync(desk, 'utf8'))
 const un = parseRundown('<?xml version="1.0"?><items><item><type>MOVIE</type><name>x</name><mystery>7</mystery><transtitionDuration>9</transtitionDuration></item></items>')
 c.ok('unknown tags are kept, old spelling is read', un.items[0].extra?.mystery === '7' && un.items[0].props.transitionDuration === 9, un.items[0])
 for (const bad of ['', '<items>', '<x></x>', '<items><item></items>', 'hello']) { let threw = false; try { parseRundown(bad) } catch { threw = true } c.ok(`refuses broken file ${JSON.stringify(bad)}`, threw) }
+
+// Settings from before the app was renamed.
+{
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'renamed é '))
+	const from = path.join(tmp, 'Caspar VT'), put = (d, f, x) => { const p = path.join(d, f); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, x) }
+	const files = { 'settings.json': '{"web":{"code":"246810"}}', 'web.key': 'k', 'session.json': '[]', 'decks.json': '{}', 'media.json': '[]', 'seen.json': '{}', 'presets/One.xml': '<items/>', 'Local Storage/leveldb/000003.log': 'x' }
+	for (const [f, x] of Object.entries(files)) put(from, f, x)
+	for (const f of ['Local Storage/leveldb/LOCK', 'lockfile', 'Network/Cookies', 'preview-cache/a.mp4']) put(from, f, 'x')
+	const list = (d) => fs.readdirSync(d, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => path.relative(d, path.join(e.parentPath, e.name)).replace(/\\/g, '/')).sort()
+	const before = list(from)
+	const to = path.join(tmp, 'CasparCG Advanced Client')
+	put(to, 'lockfile', '') // the app's own lock is made first
+	c.ok('rename: everything is copied', carryOver(from, to).length === 0 && Object.entries(files).every(([f, x]) => fs.readFileSync(path.join(to, f), 'utf8') === x))
+	c.ok('rename: caches and locks are not', list(to).join() === [...Object.keys(files), 'lockfile'].sort().join(), list(to))
+	c.ok('rename: the old folder stays as it was', list(from).join() === before.join() && Object.entries(files).every(([f, x]) => fs.readFileSync(path.join(from, f), 'utf8') === x))
+	put(to, 'settings.json', 'new'); put(from, 'settings.json', 'old'); put(to, 'session.json', 'new')
+	c.ok('rename: only the first time', carryOver(from, to).length === 0 && fs.readFileSync(path.join(to, 'settings.json'), 'utf8') === 'new' && fs.readFileSync(path.join(to, 'session.json'), 'utf8') === 'new')
+	c.ok('rename: nothing happens without an old folder', carryOver(path.join(tmp, 'none'), path.join(tmp, 'fresh')).length === 0 && !fs.existsSync(path.join(tmp, 'fresh')))
+	const half = path.join(tmp, 'half'); put(half, 'session.json', 'partial'); carryOver(from, half)
+	c.ok('rename: a copy that was cut short is done again', fs.readFileSync(path.join(half, 'session.json'), 'utf8') === '[]' && fs.existsSync(path.join(half, 'settings.json')))
+	const stuck = path.join(tmp, 'stuck'); fs.mkdirSync(path.join(stuck, 'seen.json', 'x'), { recursive: true })
+	c.ok('rename: says what could not be copied, and copies the rest', carryOver(from, stuck).join() === 'seen.json' && fs.existsSync(path.join(stuck, 'settings.json')))
+	fs.rmSync(tmp, { recursive: true, force: true })
+}
 
 // Two screens editing one rundown.
 {

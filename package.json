@@ -1,13 +1,13 @@
 {
-  "name": "casparcg-canonical-client",
+  "name": "casparcg-advanced-client",
   "version": "1.2.0",
   "description": "CasparCG client with playlists, channel takes and local clip preview",
   "main": "dist/main/main.js",
   "private": true,
   "license": "UNLICENSED",
   "type": "commonjs",
-  "productName": "CasparCG Client",
-  "author": "internal-events-support",
+  "productName": "CasparCG Advanced Client",
+  "author": "nerif-tafu",
   "scripts": {
     "build": "node scripts/build.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -22,8 +22,9 @@
     "typescript": "^7.0.2"
   },
   "build": {
-    "appId": "com.internal-events-support.casparcg-client",
-    "productName": "CasparCG Client",
+    "appId": "com.nerif-tafu.casparcg-advanced-client",
+    "productName": "CasparCG Advanced Client",
+    "copyright": "Copyright © 2026 nerif-tafu",
     "npmRebuild": false,
     "directories": {
       "output": "release"
@@ -45,10 +46,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "CasparCG-Client-Setup-${version}.${ext}"
+      "artifactName": "CasparCG-Advanced-Client-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "CasparCG-Client-Portable-${version}.${ext}"
+      "artifactName": "CasparCG-Advanced-Client-Portable-${version}.${ext}"
     }
   }
 }

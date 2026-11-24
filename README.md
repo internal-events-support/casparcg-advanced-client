@@ -1,6 +1,8 @@
-# CasparCG Client
+# CasparCG Advanced Client
 
 A CasparCG client with playlists, takes between any two channels, and local clip preview. Works with an unmodified CasparCG Server.
+
+Up to 1.2.0 it was called CasparCG Client. Settings are copied from the old folder (`%APPDATA%\Caspar VT`) the first time it starts. It installs next to the old version, so quit and uninstall that one.
 
 - Same tools, keys and rundown files (.xml) as the original CasparCG Client. A playlist is saved as an auto play group and a Channel Take as a custom command, so the original client can still open the file.
 - **Playlists** loop or stop on the last clip, play the next clip by themselves or wait for Next, step forwards and back, can be edited while they play, carry on through a take, and are picked up again after a restart.
@@ -43,6 +45,7 @@ The exes are not code-signed, so Windows SmartScreen warns the first time.
 
     node test/unit.mjs                       # rundown files and every tool's commands
     python test/hidden.py 300 node test/e2e.mjs <work dir> <media dir> <log>   # the real app on an isolated server
+    python test/hidden.py 120 node test/renamed.mjs <log>                      # settings from before the app was renamed
     python test/hidden.py 300 node test/web.mjs <work dir> <chrome.exe> <rundown.xml>      # the client in browsers next to the app
 
 ## Layout
@@ -54,11 +57,12 @@ The exes are not code-signed, so Windows SmartScreen warns the first time.
     src/main/commands.ts  the AMCP each tool sends
     src/main/api.ts       HTTP and OSC control
     src/main/overlay.ts   the playback overlay; static/overlay.html is its page
+    src/main/migrate.ts   settings from before the app was renamed
     src/main/web.ts       web interface server; src/web/ runs the client in a browser
     src/shared/merge.ts   two screens editing one rundown
     src/shared/relink.ts  missing clips and finding their new names
     src/shared/tools.ts   every tool and its properties (the inspector is built from this)
-    src/ui/               interface, built from GMeet ISO's kit and tokens
+    src/ui/               interface, built from Google Meet ISO's kit and tokens
 
 Takes deliberately avoid BEGIN/COMMIT: the server runs batches on a queue shared by all clients, so another client
 loading thumbnails can hold them up for seconds.

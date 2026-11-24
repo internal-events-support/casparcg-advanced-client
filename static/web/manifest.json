@@ -1,1 +1,1 @@
-{ "name": "CasparCG Client", "short_name": "CasparCG Client", "display": "standalone", "start_url": "/", "background_color": "#1e1e1e", "theme_color": "#2b2b2b", "icons": [{ "src": "/icon.png", "sizes": "256x256", "type": "image/png" }] }
+{ "name": "CasparCG Advanced Client", "short_name": "CasparCG Advanced Client", "display": "standalone", "start_url": "/", "background_color": "#1e1e1e", "theme_color": "#2b2b2b", "icons": [{ "src": "/icon.png", "sizes": "256x256", "type": "image/png" }] }

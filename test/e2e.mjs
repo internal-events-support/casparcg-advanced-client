@@ -280,7 +280,7 @@ from ctypes import wintypes as w
 u=ctypes.windll.user32
 def cb(h,l):
     b=ctypes.create_unicode_buffer(99); u.GetWindowTextW(h,b,99)
-    if b.value=='CasparCG Client' and u.IsWindowVisible(h): u.PostMessageW(h,0x10,0,0)
+    if b.value=='CasparCG Advanced Client' and u.IsWindowVisible(h): u.PostMessageW(h,0x10,0,0)
     return True
 u.EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool,w.HWND,w.LPARAM)(cb),0)`]); await sleep(600)
 	c.ok('closing during a playlist asks first', await until(() => p.ev(`/playlist is on air/i.test(document.querySelector('.sheet')?.textContent ?? '')`), 6000), await p.ev(`document.querySelector('.sheet')?.textContent`))
