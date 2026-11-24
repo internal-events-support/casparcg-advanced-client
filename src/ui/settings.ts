@@ -95,7 +95,7 @@ const PANES: Record<string, { label: string; icon: string; build: () => Promise<
   ], 'Where OSC Output items can send to.')] },
   keys: { label: 'Shortcuts', icon: 'bolt', build: () => [['Playing', [['F1', 'Stop'], ['F2', 'Play'], ['Shift+F2', 'Play now'], ['F3', 'Load'], ['F4', 'Pause / resume'], ['F5', 'Next'], ['Shift+F5', 'Previous (playlists)'], ['F6', 'Update'], ['F7', 'Invoke'], ['F8', 'Preview'], ['F10', 'Clear'], ['F11', 'Clear layer'], ['F12', 'Clear channel']]],
     ['Clips', [['Space', 'Play / pause the local preview'], ['Alt+Left / Right', 'Back / forward on the server']]],
-    ['Editing', [['Ctrl+Z / Ctrl+Y', 'Undo / redo'], ['Ctrl+C / X / V', 'Copy / cut / paste'], ['Ctrl+D', 'Duplicate'], ['Ctrl+Shift+C / V', 'Copy / apply template'], ['Ctrl+G', 'Group'], ['Ctrl+Shift+G', 'Ungroup'], ['Ctrl+P', 'Make playlist'], ['Ctrl+[ / ]', 'Collapse / expand all'], ['Delete', 'Delete']]],
+    ['Editing', [['Ctrl+Z / Ctrl+Y', 'Undo / redo'], ['Ctrl+C / X / V', 'Copy / cut / paste'], ['Ctrl+E', 'Switch between Edit and Show'], ['Ctrl+D', 'Duplicate'], ['Ctrl+Shift+C / V', 'Copy / apply template'], ['Ctrl+G', 'Group'], ['Ctrl+Shift+G', 'Ungroup'], ['Ctrl+P', 'Make playlist'], ['Ctrl+[ / ]', 'Collapse / expand all'], ['Delete', 'Delete']]],
     ['Files', [['Ctrl+N', 'New'], ['Ctrl+O', 'Open'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save as'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'], ['Ctrl+F', 'Search library']]]].map(([t, r]) => section(t as string, (r as string[][]).map(([k, l]) => row(l, h('kbd', k))))) },
 };
 

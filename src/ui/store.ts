@@ -6,7 +6,7 @@ interface Bridge { call(name: string, ...a: unknown[]): Promise<{ ok: boolean; v
 export const vt = (window as unknown as { vt: Bridge }).vt;
 
 // ---- events ------------------------------------------------------------------------------------------
-type Ev = 'doc' | 'select' | 'state' | 'library' | 'settings' | 'log' | 'tabs';
+type Ev = 'doc' | 'select' | 'state' | 'library' | 'settings' | 'log' | 'tabs' | 'tab';
 const subs = new Map<Ev, Set<() => void>>();
 export function on(ev: Ev, fn: () => void): void {
   if (!subs.has(ev)) subs.set(ev, new Set());
@@ -277,6 +277,7 @@ export function copyTemplate(): void {
   if (s.length !== 1) { toast('Select the one entry to copy the settings from', 'bad'); return; }
   template = structuredClone(s[0]);
   toast(`Template copied from ${template.label}`);
+  emit('select');
 }
 /** Put the template's settings on an item. The clip, label, remote ID and story ID stay its own. */
 export function stamp(i: Item, t: Item): void {
@@ -381,13 +382,21 @@ export function clock(s: number, up = false): string {
   const ss = String(n % 60).padStart(2, '0');
   return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
+/** The playlist a clip is in: that decides where it plays, not the clip's own output. */
+export const playlistOf = (i: Item): Item | undefined => doc()?.items.find((x) => isPlaylist(x) && x.items?.includes(i));
+/** Frame rate of the channel an item plays on. Seek and length count in its frames. */
+export function fpsOf(i: Item): number {
+  const at = playlistOf(i) ?? i;
+  return store.state?.devices.find((d) => d.name === (at.device || homeDevice()))?.fps[at.channel - 1] || 50;
+}
 export function itemSeconds(i: Item): number {
   if (i.type !== 'MOVIE' && i.type !== 'AUDIO') return i.duration > 0 ? i.duration / 1000 : 0;
   const m = media(i.name, i.device || undefined);
   if (!m) return 0;
   const len = Number(i.props.length) || 0;
-  const fps = store.state?.devices.find((d) => d.name === (i.device || homeDevice()))?.fps[i.channel - 1] ?? 50;
-  return len > 0 ? len / fps : Math.max(0, m.seconds - (Number(i.props.seek) || 0) / fps);
+  const fps = fpsOf(i);
+  const left = Math.max(0, m.seconds - (Number(i.props.seek) || 0) / fps);
+  return len > 0 ? Math.min(len / fps, left) : left;
 }
 /** A rundown item for a library entry, aimed at sensible defaults. */
 export function itemFromMedia(m: MediaEntry): Item {

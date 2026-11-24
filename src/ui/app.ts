@@ -1,26 +1,38 @@
-// App shell: unified top bar, library | tabs | preview + inspector, bottom bar, and keyboard.
+// App shell: top bar, tabs, status bar and keyboard. Edit has the library, preview and inspector, Show has the preview and details; the other tabs are full width.
 import type { Action, AppState, Doc, Library, LogLine, Settings } from '../shared/types';
+import { buildInfo } from './info';
 import { buildInspector } from './inspector';
 import { button, confirmSheet, h, icon, popover, segmented, textField, toggle } from './kit';
 import { buildLibrary } from './library';
 import { buildChannels } from './channels';
-import { buildPreview, previewToggle } from './preview';
+import { buildPreview, previewMode, previewPause, previewToggle } from './preview';
 import { buildRundown, closeDoc, setCollapsed } from './rundown';
 import { activate, applyTemplate, call, copy, copyTemplate, doc, duplicate, emit, execute, homeDevice, moveSelection, newDoc, on, openFiles, paste, removeSelected, save, store, sync, toast, undo, ungroup, visible, vt, wrap } from './store';
 
-type Tab = 'rundown' | 'channels' | 'activity';
-let tab: Tab = 'rundown';
+type Tab = 'edit' | 'show' | 'channels' | 'activity';
+let tab: Tab = 'edit';
+let body: HTMLElement;
 const hosts = new Map<Tab, HTMLElement>();
+let inspector: HTMLElement;
+let info: HTMLElement;
 let nav: ReturnType<typeof segmented>;
 function showTab(t: Tab): void {
   tab = t;
   nav.set(t);
   for (const [k, el] of hosts) el.hidden = k !== t;
+  body.classList.toggle('show', t === 'show');
+  body.classList.toggle('wide', t !== 'edit' && t !== 'show');
+  inspector.hidden = t !== 'edit';
+  info.hidden = t !== 'show';
+  previewPause();
+  if (t === 'edit' || t === 'show') previewMode(t === 'show');
+  try { if (t === 'edit' || t === 'show') localStorage.setItem('vt.tab', t); } catch { /* not kept */ }
+  emit('tab');
 }
 
 // ---- top bar ----------------------------------------------------------------------------------------------
 function topBar(): HTMLElement {
-  nav = segmented([{ value: 'rundown', label: 'Rundown' }, { value: 'channels', label: 'Channels' }, { value: 'activity', label: 'Activity' }], tab, (v) => showTab(v as Tab));
+  nav = segmented([{ value: 'edit', label: 'Edit' }, { value: 'show', label: 'Show' }, { value: 'channels', label: 'Channels' }, { value: 'activity', label: 'Activity' }], tab, (v) => showTab(v as Tab));
   const settings = h('button.btn.pill', icon('gear'), 'Settings') as HTMLButtonElement;
   settings.addEventListener('click', () => void call('openSettings'));
   return h('header.topbar', h('div.left', h('span.app-title', 'CasparCG Client')), h('div.center', nav.el), h('div.right', settings));
@@ -88,7 +100,7 @@ function bottomBar(): HTMLElement {
 const FKEYS: Record<string, Action> = { F1: 'stop', F2: 'play', F3: 'load', F4: 'pause', F5: 'next', F6: 'update', F7: 'invoke', F8: 'preview', F10: 'clear', F11: 'clearLayer', F12: 'clearChannel' };
 async function act(a: Action): Promise<void> {
   // With no preview channel set for the server, F8 plays the clip in the local preview instead.
-  if (a === 'preview' && !store.settings.devices.some((d) => d.preview > 0)) return previewToggle();
+  if (a === 'preview' && !store.settings.devices.some((d) => d.preview > 0)) return tab === 'edit' || tab === 'show' ? previewToggle() : undefined;
   if (a === 'clearChannel' && store.settings.confirmClear && !(await confirmSheet('Clear the whole channel?', 'Everything on this channel goes off air.', 'Clear', true))) return;
   await execute(a);
 }
@@ -108,6 +120,10 @@ function keys(e: KeyboardEvent): void {
   const k = e.key.toLowerCase();
   const done = () => e.preventDefault();
   if (ctrl && k === 's') { done(); void save(e.shiftKey); return; }
+  if (ctrl && k === 'e') { done(); showTab(tab === 'edit' ? 'show' : 'edit'); return; }
+  // Everything that changes the rundown works in Edit only.
+  const editing = tab === 'edit';
+  if (ctrl && 'onwf'.includes(k) && !editing) { done(); return; }
   if (ctrl && k === 'o') { done(); void openFiles(); return; }
   if (ctrl && k === 'n') { done(); newDoc(); return; }
   if (ctrl && k === 'w') { done(); const d = doc(); if (d) void closeDoc(d); return; }
@@ -120,10 +136,11 @@ function keys(e: KeyboardEvent): void {
     return;
   }
   if (typing) { if (e.key === 'Escape') el.blur(); return; }
+  if (!editing && (e.key === 'Delete' || (ctrl && 'zyxcvdgp'.includes(k)))) return;
   if (ctrl && k === 'z') { done(); undo(e.shiftKey); return; }
   if (ctrl && k === 'y') { done(); undo(true); return; }
-  if (e.key === ' ') { done(); if (!e.repeat) previewToggle(); return; }
-  if (tab === 'activity') return;
+  if (e.key === ' ') { done(); if (!e.repeat && (editing || tab === 'show')) previewToggle(); return; }
+  if (tab === 'activity' || tab === 'channels') return;
   if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { done(); void act(e.key === 'ArrowLeft' ? 'back' : 'forward'); return; }
   if (ctrl && e.shiftKey && k === 'c') { done(); copyTemplate(); return; }
   if (ctrl && e.shiftKey && k === 'v') { done(); applyTemplate(); return; }
@@ -155,14 +172,16 @@ async function start(): Promise<void> {
   const root = document.getElementById('app')!;
   const top = topBar();
   const tabhost = h('main.tabhost');
-  for (const [k, el] of [['rundown', buildRundown()], ['channels', buildChannels()], ['activity', buildActivity()]] as [Tab, HTMLElement][]) {
+  for (const [k, el] of [['edit', buildRundown('edit')], ['show', buildRundown('show', () => showTab('edit'))], ['channels', buildChannels()], ['activity', buildActivity()]] as [Tab, HTMLElement][]) {
     el.classList.add('tab');
     hosts.set(k, el);
     tabhost.append(el);
   }
-  const body = h('div.vt-body', buildLibrary(), h('div.vt-center', tabhost), h('div.vt-right', buildPreview(), buildInspector()));
+  body = h('div.vt-body', buildLibrary(), h('div.vt-center', tabhost), h('div.vt-right', buildPreview(), (inspector = buildInspector()), (info = buildInfo())));
   root.append(top, body, bottomBar());
-  showTab('rundown');
+  let first: Tab = 'edit';
+  try { if (localStorage.getItem('vt.tab') === 'show') first = 'show'; } catch { /* start in Edit */ }
+  showTab(first);
 
   vt.on('state', ((s: AppState) => { store.state = s; emit('state'); }) as never);
   vt.on('library', ((n: string, l: Library) => { store.library = { ...store.library, [n]: l }; emit('library'); }) as never);

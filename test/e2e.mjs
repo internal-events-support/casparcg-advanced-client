@@ -26,7 +26,7 @@ try {
 	const name = (l) => l.name.toLowerCase()
 	c.ok('connects', (await st()).connected, app.output())
 	c.ok('window has the whole layout', await p.ev(`['.topbar','.library','.preview','.rundown','.channels','.inspector','.statusbar'].every(s=>document.querySelector(s))`))
-	c.ok('tabs', (await p.ev(`[...document.querySelectorAll('.topbar .segmented button')].map(b=>b.textContent).join()`)) === 'Rundown,Channels,Activity')
+	c.ok('tabs', (await p.ev(`[...document.querySelectorAll('.topbar .segmented button')].map(b=>b.textContent).join()`)) === 'Edit,Show,Channels,Activity')
 	c.ok('nothing left of a vision mixer', await p.ev(`!/\\b(PGM|PVW|Program|Programme)\\b/.test(document.body.innerText) && !document.querySelector('.monitors,.takes,canvas')`), await p.ev(`document.body.innerText`))
 
 	// Build a rundown through the app's own XML import.
@@ -107,7 +107,7 @@ try {
 	for (const [what, f, t, re] of [['the same layer', '1-10', '1-10', /different layers/], ['a channel that does not exist', '1-10', '9-10', /4 channels/], ['an empty layer', '4-77', '1-10', /empty/]]) { const r = await take('cut', f, t); c.ok('refuses ' + what, re.test(r), r) }
 	await srv.amcp('PLAY 3-31 a3'); await sleep(400); const rf = await take('fade', '4-20', '3-30'); c.ok('refuses a fade with no free layer above', /layer 31/.test(rf), rf)
 	await srv.amcp('CLEAR 3'); await srv.amcp('CLEAR 4'); await sleep(300)
-	await tab('Rundown')
+	await tab('Edit')
 
 	// --- editing a playlist while it plays
 	await pick('Loop'); await p.key('F3'); await until(async () => name((await st()).two) === 'p1'); await take('cutplay'); await until(async () => !(await st()).one.paused && name((await st()).one) === 'p1')
@@ -255,7 +255,7 @@ try {
 	await tab('Activity'); await p.ev(`vt.call('raw','Localhost','MIXER 1-10 FILL ' + '0.1 '.repeat(300))`); await sleep(500)
 	const act = await p.ev(`(()=>{const l=document.querySelector('.s-log-list'),b=document.querySelector('.s-log-bar').getBoundingClientRect(),h=document.querySelector('.tabhost').getBoundingClientRect();return{rows:l.children.length,scrolls:l.scrollHeight>l.clientHeight,wide:l.scrollWidth-l.clientWidth,bar:b.bottom<=h.bottom+1&&b.right<=h.right+1&&b.top>h.top,end:l.scrollTop+l.clientHeight>l.scrollHeight-60}})()`)
 	c.ok('Activity scrolls inside its panel with the command bar in view', act.rows > 60 && act.scrolls && act.wide <= 0 && act.bar && act.end, act)
-	await tab('Rundown')
+	await tab('Edit')
 
 	// --- saving
 	const saved = await p.ev(`(async()=>{const d=JSON.parse(JSON.stringify((await vt.call('init')).value.docs[0]));d.path=${JSON.stringify(path.join(dir, 'saved.xml'))};const r=await vt.call('save',d,false);return r.ok})()`)

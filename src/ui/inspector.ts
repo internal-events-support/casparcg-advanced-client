@@ -105,12 +105,6 @@ export function buildInspector(): HTMLElement {
     sub.textContent = one && (one.type === 'MOVIE' || one.type === 'AUDIO') ? clock(itemSeconds(one)) : '';
 
     if (one && t.note) body.append(h('div.in-note', icon('warn'), t.note));
-    if (one?.type === 'PLAYLIST') {
-      const d = store.state?.decks.find((x) => x.playlistId === one.id);
-      body.append(h('div.in-acts', button('Load', () => void execute('load', one.id), 'sm'), button('Play', () => void execute('play', one.id), 'sm primary'), button('Previous', () => void execute('prev', one.id), 'sm'), button('Next', () => void execute('next', one.id), 'sm')),
-        d ? h('div.caption.in-deck', `On ${d.channel}-${d.layer}, clip ${d.index + 1} of ${d.count}`) : '');
-    }
-
     const label = textField(same(items, (i) => i.label) ?? '', (v) => edit(ids, 'label', (i) => { i.label = v; }), { placeholder: one ? '' : 'Mixed', live: true });
     const colour = h('span.in-swatches', ...COLORS.map((c) => {
       const b = h('button' + ((same(items, (i) => i.color ?? '') === c) ? '.on' : ''), { title: c || 'Default', style: `background:${c || 'transparent'}` });

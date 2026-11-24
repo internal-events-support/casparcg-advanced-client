@@ -3,6 +3,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 
@@ -55,7 +56,11 @@ export class Preview {
   private run(exe: string, args: string[], onErr?: (s: string) => void, track = false): Promise<string> {
     return new Promise((ok, bad) => {
       const c = spawn(exe, args, { windowsHide: true });
-      if (track) this.child = c;
+      if (track) {
+        this.child = c;
+        // A server on this PC comes first: never let making a preview copy disturb what is on air.
+        try { if (c.pid) os.setPriority(c.pid, os.constants.priority.PRIORITY_LOW); } catch { /* it may have finished already */ }
+      }
       let out = '';
       let err = '';
       c.stdout.on('data', (d: Buffer) => (out += d));

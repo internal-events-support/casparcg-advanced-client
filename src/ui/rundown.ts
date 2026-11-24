@@ -1,4 +1,4 @@
-// Centre: rundown tabs, toolbar and item rows, with live state painted onto each row.
+// The rundown, in two forms: Edit (change the show) and Show (run it, nothing can be changed).
 import { findItem, isContainer, isPlaylist, newItem, tool, walk } from '../shared/tools';
 import { stem, type Action, type Doc, type Item } from '../shared/types';
 import { button, confirmSheet, h, icon, iconButton, menu, promptSheet, type MenuItem } from './kit';
@@ -10,7 +10,6 @@ const MOVE = 'application/x-vt-move';
 export const COLORS = ['', '#8c3a3a', '#a0522d', '#b8922f', '#6b8e23', '#2e8b57', '#2f7f8f', '#4673c3', '#6a4fa3', '#a0478f', '#555555'];
 
 interface RowEls { el: HTMLElement; badge: HTMLElement; where: HTMLElement; total: HTMLElement; time: HTMLElement; bar: HTMLElement; id: string; item: Item; parent: Item | null; mini?: HTMLElement; was: string }
-let rows: RowEls[] = [];
 
 // ---- closing tabs --------------------------------------------------------------------------------------
 export async function closeDoc(d: Doc): Promise<void> {
@@ -26,14 +25,23 @@ export async function closeDoc(d: Doc): Promise<void> {
 }
 
 // ---- tabs and toolbar ---------------------------------------------------------------------------------------
-export function buildRundown(): HTMLElement {
+export function buildRundown(mode: 'edit' | 'show', toEdit: () => void = () => undefined): HTMLElement {
+  const show = mode === 'show';
+  let rows: RowEls[] = [];
   const tabs = h('div.rd-tabs');
   const list = h('div.rd-list', { tabIndex: 0 });
+  const root = h(`section.rundown.${mode}`);
   const count = h('span.caption.rd-count');
 
   const renderTabs = () => {
     tabs.textContent = '';
     for (const d of store.docs) {
+      if (show) {
+        const t = h('button.rd-tab' + (d.id === store.active ? '.active' : ''), h('span', d.name));
+        t.addEventListener('click', () => activate(d.id));
+        tabs.append(t);
+        continue;
+      }
       const x = h('button.rd-x', { title: 'Close' }, icon('x'));
       const t = h('button.rd-tab' + (d.id === store.active ? '.active' : ''), { title: d.path || 'Not saved yet' }, h('span', d.name), d.dirty ? h('i.dirty', { title: 'Unsaved changes' }) : null, x);
       t.addEventListener('click', () => activate(d.id));
@@ -50,7 +58,7 @@ export function buildRundown(): HTMLElement {
       x.addEventListener('click', (e) => { e.stopPropagation(); void closeDoc(d); });
       tabs.append(t);
     }
-    tabs.append(iconButton('plus', () => newDoc(), 'New rundown (Ctrl+N)', 'plain'));
+    if (!show) tabs.append(iconButton('plus', () => newDoc(), 'New rundown (Ctrl+N)', 'plain'));
   };
 
   const fileBtn = button(h('span.dd', 'File', icon('chevronDown')), () => menu(fileBtn, [
@@ -68,8 +76,8 @@ export function buildRundown(): HTMLElement {
     { label: 'Group selection (Ctrl+G)', icon: 'folder', onClick: () => wrap('GROUP') },
     { label: 'Ungroup', onClick: () => ungroup() },
   ]), 'sm flat');
-  const miss = button('', () => void relinkSheet(missingItems()), 'sm miss', 'Find what these clips are called now');
-  const head = h('div.rd-head', tabs, h('span.spacer'), miss, count, h('span.rd-pair', iconButton('undo', () => undo(), 'Undo (Ctrl+Z)', 'plain'), iconButton('redo', () => undo(true), 'Redo (Ctrl+Y)', 'plain')), addBtn, fileBtn);
+  const miss = button('', () => { if (show) toEdit(); void relinkSheet(missingItems()); }, 'sm miss', 'Find what these clips are called now');
+  const head = h('div.rd-head', tabs, h('span.spacer'), miss, count, ...(show ? [] : [h('span.rd-pair', iconButton('undo', () => undo(), 'Undo (Ctrl+Z)', 'plain'), iconButton('redo', () => undo(true), 'Redo (Ctrl+Y)', 'plain')), addBtn, fileBtn]));
 
   // The buttons act on the selected entry, so say which one that is and only offer what it can do.
   const nowIcon = h('span.rd-now-ico');
@@ -93,11 +101,35 @@ export function buildRundown(): HTMLElement {
   ]), 'tb slim', 'More ways to clear');
   const tpl = h('span.tb-set', B.update.el, B.invoke.el);
   const skips = h('span.tb-set', B.prev.el, B.back.el, B.fwd.el, B.next.el);
-  const bar = h('div.rd-bar', h('div.rd-now', nowIcon, h('div.rd-now-t', nowName, nowSub)),
-    h('span.tb-set.main', B.stop.el, B.play.el, B.load.el, B.pause.el), skips, tpl, h('span.tb-set', B.clear.el, more));
+  // Edit has its own buttons: what you do to entries rather than what they do on the server.
+  const eb = (label: string, ic: string, fn: () => void, tip: string, key = '') => button(h('span.tb-in', icon(ic), h('span.tb-l', h('span.tb-t', label), key ? h('kbd', key) : null)), fn, 'tb', tip);
+  const E = {
+    dup: eb('Duplicate', 'copy', () => duplicate(), 'Duplicate (Ctrl+D)'), del: eb('Delete', 'trash', () => removeSelected(), 'Delete (Del)'),
+    list: eb('Playlist', 'playlist', () => wrap('PLAYLIST'), 'Put the selected videos in a playlist (Ctrl+P)'), group: eb('Group', 'folder', () => wrap('GROUP'), 'Group the selection (Ctrl+G)'), un: eb('Ungroup', 'layers', () => ungroup(), 'Take the entries out again (Ctrl+Shift+G)'),
+    copyT: eb('Copy template', 'template2', () => copyTemplate(), 'Copy this entry’s settings (Ctrl+Shift+C)'), applyT: eb('Apply', 'apply', () => applyTemplate(), 'Apply the copied template (Ctrl+Shift+V)'),
+  };
+  const big = h('span.rd-big');
+  const what = h('div.rd-now', nowIcon, h('div.rd-now-t', nowName, nowSub));
+  const bar = show
+    ? h('div.rd-bar', what, big, h('span.tb-set.main', B.stop.el, B.play.el, B.load.el, B.pause.el), skips, tpl, h('span.tb-set', B.clear.el, more))
+    : h('div.rd-bar', what, h('span.tb-set', E.dup, E.del), h('span.tb-set', E.list, E.group, E.un), h('span.tb-set', E.copyT, E.applyT));
+  function paintEdit(): void {
+    const s = selected();
+    const real = s.filter((x) => x.type !== 'SEPARATOR');
+    const top = selectedTop();
+    const set = (el: HTMLButtonElement, v: boolean) => { if (el.disabled === v) el.disabled = !v; };
+    set(E.dup, s.length > 0); set(E.del, s.length > 0);
+    set(E.list, top.some((x) => x.type === 'MOVIE')); set(E.group, top.some((x) => !isContainer(x) && x.type !== 'SEPARATOR'));
+    const box = top.some(isContainer);
+    if (E.un.hidden === box) E.un.hidden = !box;
+    set(E.copyT, real.length === 1 && s.length === 1); set(E.applyT, !!hasTemplate() && real.length > 0);
+  }
 
   const PLAYS = ['MOVIE', 'AUDIO'];
+  const canLoad = (i: Item) => (tool(i.type).out.includes('layer') || i.type === 'GROUP') && i.type !== 'CGTAKE' && tool(i.type).cat !== 'Mixer';
   function paintBar(): void {
+    if (root.hidden) return;
+    if (!show) paintEdit();
     const d = doc();
     const id = [...store.sel].pop();
     const f = d && id ? findItem(d.items, id) : null;
@@ -110,7 +142,7 @@ export function buildRundown(): HTMLElement {
     const layered = live && (t!.out.includes('layer') || !!grp);
     const set = (x: { el: HTMLButtonElement }, on_: boolean) => { if (x.el.disabled === on_) x.el.disabled = !on_; };
     set(B.play, live); set(B.stop, live);
-    set(B.load, layered && !['CGTAKE'].includes(i!.type) && t!.cat !== 'Mixer');
+    set(B.load, live && canLoad(i!));
     set(B.pause, timed || (layered && ['HTML', 'STILL', 'IMAGESCROLLER', 'DECKLINKINPUT'].includes(i!.type)));
     set(B.prev, !!pl); set(B.back, timed); set(B.fwd, timed);
     set(B.next, live && (!!pl || i!.type === 'TEMPLATE' || !!i!.props.triggeronnext || !!grp?.props.autoplay || !!f!.parent?.props.autoplay));
@@ -123,17 +155,39 @@ export function buildRundown(): HTMLElement {
     B.play.el.classList.toggle('lit', st === 'playing');
     for (const [x, s] of [[B.back, '−'], [B.fwd, '+']] as const) { const w = `${s}${skip()} s`; if (x.text.textContent !== w) { x.text.textContent = w; x.el.title = s === '−' ? `Back ${skip()} seconds (Alt+Left)` : `Forward ${skip()} seconds (Alt+Right)`; } }
     const n = store.sel.size;
-    const name = n > 1 ? `${i?.label ?? ''} and ${n - 1} more` : i ? i.label || t!.label : 'Nothing selected';
-    const where = !i ? 'Select an entry to play it' : [t!.label, layered && !grp ? (() => { const dk = pl ? store.state?.decks.find((x) => x.playlistId === pl.id) : undefined; return dk ? `${dk.channel}-${dk.layer}` : pl ? `${pl.channel}-${pl.layer}` : `${i.channel}-${i.layer}`; })() : ''].filter(Boolean).join('  ·  ');
+    const name = n > 1 ? (show ? `${i?.label ?? ''} and ${n - 1} more` : `${n} selected`) : i ? i.label || t!.label : 'Nothing selected';
+    const where = !i ? (show ? 'Select an entry to play it' : 'Select an entry to change it') : n > 1 && !show ? 'Changes apply to all of them' : [t!.label, layered && !grp ? (() => { const dk = pl ? store.state?.decks.find((x) => x.playlistId === pl.id) : undefined; return dk ? `${dk.channel}-${dk.layer}` : pl ? `${pl.channel}-${pl.layer}` : `${i.channel}-${i.layer}`; })() : ''].filter(Boolean).join('  ·  ');
     if (nowName.textContent !== name) nowName.textContent = name;
     if (nowSub.textContent !== where) nowSub.textContent = where;
+    if (show) {
+      // Time left on what is selected: the whole list for a playlist or group, the clip otherwise.
+      let txt = '';
+      let level = '';
+      const box = i && isContainer(i) ? timeLeft(i) : null;
+      const dk = pl ? store.state?.decks.find((x) => x.playlistId === pl.id) : undefined;
+      const l = i && st ? store.state?.layers[dk ? `${dk.device}|${dk.channel}-${dk.layer}` : `${i.device || homeDevice()}|${i.channel}-${i.layer}`] : undefined;
+      if (box) txt = box.text.split(' ')[0];
+      else if (l?.end) txt = clock(l.end - l.pos, true);
+      // Colour by the time shown. Something that loops never runs out.
+      const left = box ? (box.ends ? box.secs : Infinity) : l?.end && st === 'playing' && !l.loop ? l.end - l.pos : Infinity;
+      level = left <= store.settings.countdown.warn ? 'warn' : left <= store.settings.countdown.caution ? 'caution' : '';
+      if (big.textContent !== txt) big.textContent = txt;
+      if (big.dataset.level !== level) big.dataset.level = level;
+    }
     const ic = t?.icon ?? 'list';
     if (nowIcon.dataset.i !== ic) { nowIcon.dataset.i = ic; nowIcon.replaceChildren(icon(ic)); nowIcon.style.color = t?.color ?? ''; }
   }
 
+  root.append(head, bar, list);
+
   // ---- rows ---------------------------------------------------------------------------------------------
   function sub(i: Item, parent: Item | null): string {
     const t = tool(i.type);
+    if (show && !isContainer(i)) {
+      // On the night: where it goes and how long it is.
+      const s = itemSeconds(i);
+      return [parent && isPlaylist(parent) ? '' : t.out.includes('layer') ? `${i.channel}-${i.layer}` : '', s ? clock(s) : '', i.type === 'CGTAKE' ? `${i.props.cgtfromchannel}-${i.props.cgtfromlayer} to ${i.props.cgttochannel}-${i.props.cgttolayer}, ${String(i.props.cgtmode).toLowerCase()}${i.props.cgtroll ? ' and play' : ''}` : ''].filter(Boolean).join('  ·  ');
+    }
     if (i.type === 'PLAYLIST') return `${i.channel}-${i.layer}  ·  ${(i.items ?? []).length} clips  ·  ${clock((i.items ?? []).reduce((a, x) => a + itemSeconds(x), 0))}`;
     if (i.type === 'GROUP') { const s = groupLength(i); return `${(i.items ?? []).length} items${s ? `  ·  ${clock(s)}` : ''}`; }
     const p: string[] = [];
@@ -178,33 +232,35 @@ export function buildRundown(): HTMLElement {
     const where = h('span.rd-where');
     const total = h('span.rd-total');
     const gone = missing(i);
+    const lostTip = `${i.name} is not on the server${show ? '' : '. Click to find it'}`;
     const barEl = h('i');
     const box = isContainer(i);
     const chev = box ? h('button.rd-chev' + (i.expanded === false ? '.shut' : ''), icon('chevronDown')) : null;
     chev?.addEventListener('click', (e) => { e.stopPropagation(); toggleOpen(i); });
     let mini: HTMLElement | undefined;
-    if (isPlaylist(i)) {
+    if (show && i.type !== 'SEPARATOR') {
       const b = (ic: string, a: Action, title: string) => { const x = iconButton(ic, (e) => { e.stopPropagation(); void execute(a, i.id); }, title, 'plain'); return x; };
-      mini = h('span.rd-mini', b('cue', 'load', 'Load, paused (F3)'), b('prev', 'prev', 'Previous clip (Shift+F5)'), b('play', 'play', 'Play (F2)'), b('next', 'next', 'Next clip (F5)'));
+      const pl = isPlaylist(i);
+      mini = h('span.rd-mini', canLoad(i) ? b('cue', 'load', 'Load, paused (F3)') : null, pl ? b('prev', 'prev', 'Previous clip (Shift+F5)') : null, b('play', 'play', 'Play (F2)'), pl ? b('next', 'next', 'Next clip (F5)') : null, i.type === 'CGTAKE' ? null : b('stop', 'stop', 'Stop (F1)'));
     }
     const el = h('div.rd-row', { dataset: { id: i.id }, title: t.note ?? '' },
       h('span.rd-stripe', { style: `background:${i.color || (parent ? tool(parent.type).color : t.color)}` }), chev,
       h('span.rd-ico', { style: `color:${t.color}` }, icon(t.icon)),
       parent && isPlaylist(parent) ? h('span.rd-n', String(n + 1)) : null,
-      h('div.rd-main', h('div.rd-label', i.label || t.label), h('div.rd-sub', sub(i, parent))), mini ?? null, where, gone ? h('button.rd-miss', { title: `${i.name} is not on the server. Click to find it`, dataset: { miss: '1' } }, icon('warn'), 'Missing') : null, flags(i, parent), badge, total, time, h('div.rd-prog', barEl));
+      h('div.rd-main', h('div.rd-label', i.label || t.label), h('div.rd-sub', sub(i, parent))), mini ?? null, where, gone ? h('button.rd-miss', { title: lostTip, dataset: { miss: '1' } }, icon('warn'), 'Missing') : null, flags(i, parent), badge, total, time, h('div.rd-prog', barEl));
     el.className += ` t-${i.type.toLowerCase()}${parent ? ' child' : ''}${box ? ' box' : ''}`;
     if (gone) el.classList.add('gone');
-    el.querySelector('[data-miss]')?.addEventListener('click', (e) => { e.stopPropagation(); void relinkSheet([i]); });
-    el.draggable = true;
+    el.querySelector('[data-miss]')?.addEventListener('click', (e) => { e.stopPropagation(); if (show) toEdit(); void relinkSheet([i]); });
+    el.draggable = !show;
     el.addEventListener('mousedown', (e) => {
       if (e.button === 2 && store.sel.has(i.id)) return;
       if (e.button === 0 && store.sel.has(i.id) && !e.ctrlKey && !e.shiftKey && store.sel.size > 1) return; // may be the start of a drag
       select(i.id, e.ctrlKey ? 'toggle' : e.shiftKey ? 'range' : 'one');
     });
     el.addEventListener('click', (e) => { if (!e.ctrlKey && !e.shiftKey && store.sel.size > 1) select(i.id); });
-    el.addEventListener('dblclick', () => { if (box) toggleOpen(i); else void execute('load', i.id); });
+    el.addEventListener('dblclick', () => { if (box) toggleOpen(i); else if (show) void execute('load', i.id); else (document.querySelector('.inspector .in-row input') as HTMLInputElement | null)?.select(); });
     el.addEventListener('contextmenu', (e) => { e.preventDefault(); context(e, i); });
-    el.addEventListener('dragstart', (e) => {
+    if (!show) el.addEventListener('dragstart', (e) => {
       if (!store.sel.has(i.id)) select(i.id);
       e.dataTransfer!.setData(MOVE, JSON.stringify(selectedTop().map((x) => x.id)));
       e.dataTransfer!.effectAllowed = 'move';
@@ -221,6 +277,11 @@ export function buildRundown(): HTMLElement {
     const ids = selected().map((x) => x.id);
     const one = ids.length === 1;
     const act = (label: string, a: Action, ic: string): MenuItem => ({ label, icon: ic, onClick: () => void execute(a, i.id) });
+    if (show) {
+      menu({ x: e.clientX, y: e.clientY }, [act('Play', 'play', 'play'), ...(canLoad(i) ? [act('Load', 'load', 'cue')] : []), act('Stop', 'stop', 'stop'), ...(isPlaylist(i) ? [act('Previous clip', 'prev', 'prev'), act('Next clip', 'next', 'next')] : []), null,
+        { label: 'Mark as used', onClick: () => void call('used', ids, true) }, { label: 'Mark as unused', onClick: () => void call('used', ids, false) }]);
+      return;
+    }
     menu({ x: e.clientX, y: e.clientY }, [
       act('Play', 'play', 'play'), act('Load', 'load', 'cue'), act('Stop', 'stop', 'stop'),
       ...(isPlaylist(i) ? [act('Previous clip', 'prev', 'prev'), act('Next clip', 'next', 'next')] : []), null,
@@ -243,14 +304,15 @@ export function buildRundown(): HTMLElement {
     const top = list.scrollTop;
     list.textContent = '';
     rows = [];
+    if (root.hidden) return; // drawn again when its tab opens
     const d = doc();
     for (const { item, parent } of visible()) {
       const r = row(item, parent, parent ? parent.items!.indexOf(item) : 0);
       rows.push(r);
       list.append(r.el);
-      if (isContainer(item) && item.expanded !== false && !item.items?.length) list.append(h('div.rd-hint', { dataset: { into: item.id } }, isPlaylist(item) ? 'Drop videos here' : 'Drop items here'));
+      if (isContainer(item) && item.expanded !== false && !item.items?.length) list.append(h('div.rd-hint', { dataset: { into: item.id } }, show ? 'Empty' : isPlaylist(item) ? 'Drop videos here' : 'Drop items here'));
     }
-    if (!d?.items.length) list.append(h('div.rd-empty', h('div', icon('playlist')), 'Drag media and tools here', h('span.caption', 'or double-click them in the library')));
+    if (!d?.items.length) list.append(show ? h('div.rd-empty', h('div', icon('playlist')), 'Nothing in this rundown yet', h('span.caption', 'Add entries in the Edit tab')) : h('div.rd-empty', h('div', icon('playlist')), 'Drag media and tools here', h('span.caption', 'or double-click them in the library')));
     let n = 0;
     walk(d?.items ?? [], () => n++);
     count.textContent = n ? `${n} items` : '';
@@ -330,7 +392,7 @@ export function buildRundown(): HTMLElement {
     if (isContainer(f.item) && f.item.expanded !== false && y >= 0.75) return { spot: { parent: f.item.id, index: 0 }, el: target, how: 'after' };
     return { spot: { parent: f.parent?.id ?? null, index: at + (y >= 0.5 ? 1 : 0) }, el: target, how: y >= 0.5 ? 'after' : 'before' };
   }
-  list.addEventListener('dragover', (e) => {
+  if (!show) list.addEventListener('dragover', (e) => {
     const types = e.dataTransfer?.types ?? [];
     if (!types.includes(DRAG) && !types.includes(MOVE)) return;
     e.preventDefault();
@@ -340,7 +402,7 @@ export function buildRundown(): HTMLElement {
     if (s.el && s.how) { mark = s.el; mark.classList.add(`drop-${s.how}`); }
   });
   list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget as Node)) clearMark(); });
-  list.addEventListener('drop', (e) => {
+  if (!show) list.addEventListener('drop', (e) => {
     e.preventDefault();
     const s = spotAt(e);
     clearMark();
@@ -362,9 +424,12 @@ export function buildRundown(): HTMLElement {
   on('state', paint);
   on('library', render);
   on('settings', render);
+  let pos = 0;
+  list.addEventListener('scroll', () => { if (!root.hidden && rows.length) pos = list.scrollTop; });
+  on('tab', () => { render(); if (!root.hidden) { list.scrollTop = pos; paintSel(); } });
   renderTabs();
   render();
-  return h('section.rundown', head, bar, list);
+  return root;
 }
 
 /** How long a group runs: one after another with auto play, otherwise as long as its longest clip. */
@@ -373,7 +438,7 @@ function groupLength(g: Item): number {
   return s.length ? (g.props.autoplay ? s.reduce((a, b) => a + b, 0) : Math.max(...s)) : 0;
 }
 /** Time left on a whole playlist or group that is loaded or playing. */
-function timeLeft(c: Item): { text: string; title: string } | null {
+function timeLeft(c: Item): { text: string; title: string; secs: number; ends: boolean } | null {
   const s = store.state;
   if (!s) return null;
   const rest = (from: Item[]) => from.reduce((a, i) => a + itemSeconds(i), 0);
@@ -383,15 +448,16 @@ function timeLeft(c: Item): { text: string; title: string } | null {
     const now = d && s.items[c.id]?.state ? left(`${d.device}|${d.channel}-${d.layer}`) : null;
     if (!d || !now) return null;
     const clips = (c.items ?? []).filter((i) => i.type === 'MOVIE');
-    const t = clock(now.t + rest(clips.slice(d.index + 1)), true);
-    return d.loop ? { text: `${t} to loop`, title: 'Time until the playlist starts again' } : { text: `${t} left`, title: `Time left on the whole playlist${d.manual ? ', not counting the waits' : ''}` };
+    const secs = now.t + rest(clips.slice(d.index + 1));
+    const t = clock(secs, true);
+    return d.loop ? { secs, ends: false, text: `${t} to loop`, title: 'Time until the playlist starts again' } : { secs, ends: s.items[c.id]?.state === 'playing', text: `${t} left`, title: `Time left on the whole playlist${d.manual ? ', not counting the waits' : ''}` };
   }
   const kids = (c.items ?? []).filter((i) => i.type === 'MOVIE' || i.type === 'AUDIO');
   const on_ = kids.map((i) => ({ i, now: s.items[i.id]?.state ? left(`${i.device || homeDevice()}|${i.channel}-${i.layer}`) : null })).filter((x) => x.now);
   if (!on_.length) return null;
-  if (on_.some((x) => x.now!.loop)) return { text: 'Loops', title: 'A clip in this group loops' };
+  if (on_.some((x) => x.now!.loop)) return { secs: 0, ends: false, text: 'Loops', title: 'A clip in this group loops' };
   const t = c.props.autoplay ? on_.at(-1)!.now!.t + rest(kids.slice(kids.indexOf(on_.at(-1)!.i) + 1)) : Math.max(...on_.map((x) => x.now!.t));
-  return { text: `${clock(t, true)} left`, title: 'Time left on the whole group' };
+  return { secs: t, ends: true, text: `${clock(t, true)} left`, title: 'Time left on the whole group' };
 }
 
 export function setCollapsed(shut: boolean): void {
