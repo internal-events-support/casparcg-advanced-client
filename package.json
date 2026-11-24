@@ -1,6 +1,6 @@
 {
   "name": "casparcg-canonical-client",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "CasparCG client with playlists, channel takes and local clip preview",
   "main": "dist/main/main.js",
   "private": true,
