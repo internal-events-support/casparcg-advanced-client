@@ -3,6 +3,7 @@ import { isContainer, isPlaylist, tool, type Prop } from '../shared/tools';
 import type { Item } from '../shared/types';
 import { button, checkbox, h, icon, iconButton, popup, stepper, textField, toggle, type Child } from './kit';
 import { COLORS } from './rundown';
+import { missing, relinkSheet } from './relinkui';
 import { clock, edit, execute, homeDevice, itemSeconds, media, on, selected, store } from './store';
 
 const same = <T,>(items: Item[], get: (i: Item) => T): T | undefined => {
@@ -118,10 +119,11 @@ export function buildInspector(): HTMLElement {
     }));
     const named = alike && t.named ? (() => {
       const f = textField(same(items, (i) => i.name) ?? '', (v) => { edit(ids, 'name', (i) => { i.name = v; }); render(); }, { placeholder: one ? '' : 'Mixed' });
-      const miss = one && t.named !== 'TEMPLATE' && store.library[one.device || homeDevice()] && !media(one.name, one.device || undefined);
+      const miss = one && missing(one);
       const r = row('File', f.el);
       r.classList.add('wide');
-      if (miss) r.append(h('span.in-miss', { title: 'Not in the server’s media list' }, icon('warn')));
+      if (miss) r.append(h('span.in-miss', { title: 'Not on the server' }, icon('warn')));
+      if (one) r.append(button(miss ? 'Find…' : 'Replace…', () => void relinkSheet([one], !miss), 'sm', miss ? 'Find what this clip is called now' : 'Use another clip and keep everything else'));
       return r;
     })() : null;
     body.append(section('Item', [row('Label', label.el), named, row('Colour', colour)]));

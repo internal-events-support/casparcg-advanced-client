@@ -37,7 +37,7 @@ export async function startServer(dir, media, channels) {
 
 export async function startApp(userData, settings, port = 9333) {
 	fs.mkdirSync(userData, { recursive: true })
-	if (settings) fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(settings))
+	if (settings) fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ web: { enabled: true, port: 8136, lan: false, code: '246810' }, ...settings }))
 	const proc = spawn(path.join(ROOT, 'node_modules/electron/dist/electron.exe'), [ROOT, `--remote-debugging-port=${port}`], { cwd: ROOT, env: { ...process.env, CASPARVT_USERDATA: userData, ELECTRON_RUN_AS_NODE: undefined }, stdio: ['ignore', 'pipe', 'pipe'] })
 	let out = ''
 	proc.stdout.on('data', (d) => (out += d))

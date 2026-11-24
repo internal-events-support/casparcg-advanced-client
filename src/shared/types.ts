@@ -63,6 +63,11 @@ export interface Settings {
   markUsed: boolean;
   autoStepPreview: boolean;
   confirmClear: boolean;
+  /** Name of the sound output the local preview plays on. Empty = the Windows default. */
+  previewOutput: string;
+  /** Shell Command items may run programs on this PC. */
+  allowShell: boolean;
+  web: { enabled: boolean; port: number; lan: boolean; code: string };
   http: { enabled: boolean; port: number };
   osc: { enabled: boolean; port: number };
   countdown: { enabled: boolean; port: number; layer: number; caution: number; warn: number; flash: number };
@@ -79,6 +84,9 @@ export const DEFAULT_SETTINGS: Settings = {
   markUsed: true,
   autoStepPreview: false,
   confirmClear: true,
+  previewOutput: '',
+  allowShell: false,
+  web: { enabled: true, port: 8126, lan: false, code: '' },
   http: { enabled: true, port: 8125 },
   osc: { enabled: true, port: 3250 },
   countdown: { enabled: true, port: 8123, layer: 10, caution: 30, warn: 10, flash: 5 },
@@ -87,7 +95,7 @@ export const DEFAULT_SETTINGS: Settings = {
   recent: [],
 };
 
-export interface MediaEntry { name: string; type: 'MOVIE' | 'STILL' | 'AUDIO'; frames: number; fps: number; seconds: number }
+export interface MediaEntry { name: string; type: 'MOVIE' | 'STILL' | 'AUDIO'; frames: number; fps: number; seconds: number; size: number; date: string }
 
 export interface LayerState {
   producer: string;
@@ -136,7 +144,7 @@ export interface AppState {
   audio: Record<string, number[]>;
   /** item id → runtime flag */
   items: Record<string, { state: 'loaded' | 'playing' | 'paused' | ''; used: boolean }>;
-  services: { http: string; osc: string; countdown: string };
+  services: { http: string; osc: string; countdown: string; web: string };
   busy: boolean;
 }
 

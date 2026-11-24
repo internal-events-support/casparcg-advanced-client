@@ -1,9 +1,11 @@
 // App shell: windows, settings, documents and IPC. Playback keeps running here if the window is closed.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, Tray, type IpcMainInvokeEvent } from 'electron';
+import crypto from 'node:crypto';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import type dgram from 'node:dgram';
 import fs from 'node:fs';
 import type http from 'node:http';
 import path from 'node:path';
+import { isMissing, type Seen } from '../shared/relink';
 import { newItem } from '../shared/tools';
 import { DEFAULT_SETTINGS, stem, uid, type Action, type AppState, type Doc, type Item, type Library, type Loc, type LogLine, type Settings } from '../shared/types';
 import { parseRundown, writeRundown } from '../shared/xml';
@@ -13,6 +15,7 @@ import { Device } from './device';
 import { Engine, Refused } from './engine';
 import { Preview } from './preview';
 import { Runner } from './runner';
+import { addresses, Web } from './web';
 
 if (process.env.CASPARVT_USERDATA) app.setPath('userData', process.env.CASPARVT_USERDATA);
 else app.setPath('userData', path.join(app.getPath('appData'), 'Caspar VT'));
@@ -33,9 +36,13 @@ function loadSettings(): Settings {
   try { s = JSON.parse(fs.readFileSync(ud('settings.json'), 'utf8')) as Partial<Settings>; } catch { /* first run */ }
   const d = structuredClone(DEFAULT_SETTINGS);
   const known = Object.fromEntries(Object.entries(s).filter(([k]) => k in d)); // drop settings from earlier versions
-  return { ...d, ...known, http: { ...d.http, ...s.http }, osc: { ...d.osc, ...s.osc }, countdown: { ...d.countdown, ...s.countdown } };
+  return { ...d, ...known, http: { ...d.http, ...s.http }, osc: { ...d.osc, ...s.osc }, countdown: { ...d.countdown, ...s.countdown }, web: { ...d.web, ...s.web } };
 }
 let settings: Settings;
+function webKey(): string {
+  try { return fs.readFileSync(ud('web.key'), 'utf8'); } catch { const k = crypto.randomBytes(32).toString('hex'); writeSafe(ud('web.key'), k); return k; }
+}
+const newCode = () => String(crypto.randomInt(100000, 1000000));
 /** Write via a temporary file so a crash never leaves half a file behind. */
 function writeSafe(file: string, text: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -81,8 +88,36 @@ async function refresh(name: string): Promise<void> {
   const d = device(name);
   if (!d?.connected) return;
   const safe = <T,>(p: Promise<T>, fallback: T) => p.catch((e: Error) => { log('err', name, e.message); return fallback; });
-  library[name] = { media: await safe(d.media(), []), templates: await safe(d.templates(), []), data: await safe(d.data(), []), presets: presetNames() };
-  win?.webContents.send('library', name, library[name]);
+  setLibrary(name, { media: await safe(d.media(), []), templates: await safe(d.templates(), []), data: await safe(d.data(), []), presets: presetNames() });
+}
+function setLibrary(name: string, lib: Library): void {
+  library[name] = lib;
+  win?.webContents.send('library', name, lib);
+  noteSeen(name, lib);
+  webSrv?.docs();
+}
+/** Every clip ever seen, so a renamed file can be recognised by its size and length. */
+let seen: Record<string, Seen> = {};
+function noteSeen(name: string, lib: Library): void {
+  const s = (seen[name] ??= {});
+  let changed = false;
+  for (const m of lib.media) {
+    const k = m.name.replace(/\\/g, '/').toLowerCase();
+    if (s[k] && s[k].size === m.size && s[k].frames === m.frames) continue;
+    s[k] = m;
+    changed = true;
+  }
+  if (changed) writeSafe(ud('seen.json'), JSON.stringify(seen));
+}
+/** Notice files being added, renamed or deleted without anyone pressing refresh. */
+async function watchMedia(): Promise<void> {
+  for (const [name, d] of devices) {
+    if (!d.connected || !library[name]) continue;
+    const r = await d.scan();
+    if (!r || (!r.media.length && library[name].media.length)) continue;
+    const key = (l: { media: Library['media']; templates: string[] }) => JSON.stringify([l.media.map((m) => [m.name, m.size, m.frames]).sort(), [...l.templates].sort()]);
+    if (key(r) !== key(library[name])) setLibrary(name, { ...library[name], ...r });
+  }
 }
 
 // ---- local media for preview ---------------------------------------------------------------------------
@@ -120,7 +155,8 @@ const presetFile = (n: string) => path.join(presetDir(), n.replace(/[^\w .()-]/g
 let httpSrv: http.Server | null = null;
 let oscSrv: dgram.Socket | null = null;
 let cdSrv: http.Server | null = null;
-const services = { http: 'Off', osc: 'Off', countdown: 'Off' };
+let webSrv: Web | null = null;
+const services = { http: 'Off', osc: 'Off', countdown: 'Off', web: 'Off' };
 
 /** "1-10" on the first server, or "Server name:1-10". */
 function loc(ref: string): Loc | null {
@@ -178,10 +214,35 @@ const hooks: ApiHooks = {
   },
   status: () => ({ connected: !!device(engine.home())?.connected, layers: Object.fromEntries([...devices].flatMap(([n, d]) => [...d.layers()].filter(([, l]) => l.producer !== 'empty').map(([k, l]) => { const [c, y] = k.split('-').map(Number); const deck = engine.deckAt({ device: n, channel: c, layer: y }); return [n === engine.home() ? k : `${n}:${k}`, { ...l, playlist: deck?.label ?? null, index: deck ? deck.index + 1 : 0, count: deck?.count ?? 0 }]; }))) }),
   countdown: (ch) => {
-    const layer = engine.layer(engine.home(), ch, settings.countdown.layer);
-    return { layer, next: layer.next ? layer.next.replace(/\\/g, '/').split('/').pop()! : '' };
+    // The main layer when it has a clip; otherwise whichever layer does (lower thirds, cues): one still running first, then the top one.
+    const clips = [...(device(engine.home())?.layers() ?? [])].filter(([k, l]) => k.startsWith(`${ch}-`) && l.producer !== 'empty' && l.end > 0).map(([k, l]) => ({ n: Number(k.split('-')[1]), l }))
+      .sort((x, y) => Number(engine.ended(x.l)) - Number(engine.ended(y.l)) || y.n - x.n);
+    const main = clips.find((x) => x.n === settings.countdown.layer) ?? clips[0] ?? { n: settings.countdown.layer, l: engine.layer(engine.home(), ch, settings.countdown.layer) };
+    const layer = main.l;
+    const others = clips.filter((x) => x !== main && !engine.ended(x.l));
+    return { layer, at: main.n, others, next: layer.next ? layer.next.replace(/\\/g, '/').split('/').pop()! : '' };
   },
   log: (k, t) => log(k, 'Remote', t),
+};
+const seconds = (i: Item): number => {
+  if (i.type !== 'MOVIE' && i.type !== 'AUDIO') return 0;
+  const dev = i.device || engine.home();
+  const m = library[dev]?.media.find((x) => x.name.toLowerCase() === i.name.replace(/\\/g, '/').toLowerCase());
+  if (!m) return 0;
+  const fps = device(dev)?.fps(i.channel) || 50;
+  return Number(i.props.length) > 0 ? Number(i.props.length) / fps : Math.max(0, m.seconds - (Number(i.props.seek) || 0) / fps);
+};
+const webHooks = {
+  docs: () => {
+    const one = (i: Item): unknown => ({ id: i.id, type: i.type, label: i.label, name: i.name, device: i.device || engine.home(), channel: i.channel, layer: i.layer, color: i.color, secs: seconds(i), missing: isMissing(i, library[i.device || engine.home()]),
+      auto: i.type === 'PLAYLIST' ? i.props.cgauto !== false : !!i.props.autoplay, loop: i.type === 'PLAYLIST' ? i.props.cgloop === 'Loop forever' : !!i.props.loop, ...(i.items ? { items: i.items.map(one) } : {}) });
+    return { skip: settings.skipSeconds, docs: [...runner.docs.values()].map((d) => ({ id: d.id, name: d.name, items: d.items.map(one) })) };
+  },
+  state: () => { const s = state(); return { devices: s.devices.map((d) => ({ name: d.name, connected: d.connected, channels: d.channels })), layers: Object.fromEntries(Object.entries(s.layers).filter(([, l]) => l.producer !== 'empty').map(([k, l]) => [k, { ...l, pos: Math.round(l.pos * 10) / 10 }])), decks: s.decks, items: s.items }; },
+  execute: (id: string, a: Action) => runner.execute(id, a),
+  transport: (t: Loc, v: string) => hooks.transport(t, v),
+  take: hooks.take,
+  log: hooks.log,
 };
 const flat = (items: Item[]): Item[] => items.flatMap((i) => [i, ...flat(i.items ?? [])]);
 
@@ -190,7 +251,9 @@ function syncServices(): void {
   try { oscSrv?.close(); } catch { /* was not open */ }
   oscSrv = null;
   cdSrv?.close(); cdSrv?.closeAllConnections?.(); cdSrv = null;
-  services.http = services.osc = services.countdown = 'Off';
+  webSrv?.close(); webSrv = null;
+  services.http = services.osc = services.countdown = services.web = 'Off';
+  if (settings.web.enabled) webSrv = new Web(settings.web, webKey(), ROOT, webHooks, (s) => (services.web = s || `On, port ${settings.web.port}`));
   if (settings.http.enabled) httpSrv = startHttp(settings.http.port, hooks, (s) => (services.http = s || `On, port ${settings.http.port}`));
   if (settings.osc.enabled) oscSrv = startOsc(settings.osc.port, hooks, (s) => (services.osc = s || `On, port ${settings.osc.port}`));
   if (settings.countdown.enabled) cdSrv = startCountdown(settings.countdown, hooks, (s) => (services.countdown = s || `On, port ${settings.countdown.port}`));
@@ -225,13 +288,14 @@ function remember(file: string): void {
 function saveSettings(): void { writeSafe(ud('settings.json'), JSON.stringify(settings, null, 2)); }
 
 function setDocs(docs: Doc[]): void {
-  const before = new Map(runner.playlists().map((p) => [p.id, JSON.stringify([p.props, (p.items ?? []).map((i) => [i.id, i.name])])]));
+  const before = new Map(runner.playlists().map((p) => [p.id, JSON.stringify([p.props, (p.items ?? []).map((i) => [i.id, i.name, i.props.seek, i.props.length])])]));
   runner.docs = new Map(docs.map((d) => [d.id, d]));
   for (const p of runner.playlists()) {
-    const now = JSON.stringify([p.props, (p.items ?? []).map((i) => [i.id, i.name])]);
+    const now = JSON.stringify([p.props, (p.items ?? []).map((i) => [i.id, i.name, i.props.seek, i.props.length])]);
     if (before.has(p.id) && before.get(p.id) !== now) void engine.run(() => engine.playlistEdited(p)).catch(problem);
   }
   scheduleSession(docs);
+  webSrv?.docs();
 }
 let sessionTimer: NodeJS.Timeout | null = null;
 function scheduleSession(docs: Doc[]): void {
@@ -282,17 +346,21 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
   presets: () => presetNames(),
   getSettings: () => settings,
   setSettings: async (patch: Partial<Settings>) => {
-    const svc = JSON.stringify([settings.http, settings.osc, settings.countdown]);
+    const svc = JSON.stringify([settings.http, settings.osc, settings.countdown, settings.web]);
     settings = { ...settings, ...patch };
     saveSettings();
     syncDevices();
-    if (JSON.stringify([settings.http, settings.osc, settings.countdown]) !== svc) syncServices();
+    if (JSON.stringify([settings.http, settings.osc, settings.countdown, settings.web]) !== svc) syncServices();
     win?.webContents.send('settings', settings);
     settingsWin?.webContents.send('settings', settings);
     return settings;
   },
   openSettings: () => openSettings(),
   services: () => services,
+  seen: (n: string) => seen[n] ?? {},
+  webInfo: () => ({ state: services.web, addresses: settings.web.lan ? addresses() : [] }),
+  webOpen: () => shell.openExternal(`http://127.0.0.1:${settings.web.port}/#${settings.web.code}`),
+  webNewCode: async () => { settings = { ...settings, web: { ...settings.web, code: newCode() } }; saveSettings(); syncServices(); settingsWin?.webContents.send('settings', settings); return settings; },
   deviceStates: () => state().devices,
   browseFolder: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { properties: ['openDirectory'] }); return r.filePaths[0] ?? ''; },
   browseExe: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { title: 'Choose ffmpeg.exe', filters: [{ name: 'ffmpeg', extensions: ['exe'] }], properties: ['openFile'] }); return r.filePaths[0] ?? ''; },
@@ -317,7 +385,7 @@ function guard(w: BrowserWindow): void {
 function openMain(): void {
   if (win) { win.show(); win.focus(); return; }
   win = new BrowserWindow({
-    width: 1560, height: 960, minWidth: 1180, minHeight: 700, title: 'Caspar VT', icon: ICON, backgroundColor: '#1e1e1e',
+    width: 1560, height: 960, minWidth: 1180, minHeight: 700, title: 'CasparCG Client', icon: ICON, backgroundColor: '#1e1e1e',
     titleBarStyle: 'hidden', titleBarOverlay: { color: '#383838', symbolColor: '#e8e8e8', height: 48 }, webPreferences: { ...web(), backgroundThrottling: false },
   });
   win.setMenuBarVisibility(false);
@@ -356,6 +424,8 @@ void app.whenReady().then(() => {
   protocol.handle('vtmedia', (r) => preview.serve(r));
   Menu.setApplicationMenu(null);
   settings = loadSettings();
+  if (!settings.web.code) { settings.web.code = newCode(); saveSettings(); }
+  try { seen = JSON.parse(fs.readFileSync(ud('seen.json'), 'utf8')) as typeof seen; } catch { /* none yet */ }
   engine = new Engine(device, () => settings, ud('decks.json'));
   engine.on('log', (k: 'info', t: string) => log(k, 'Playlist', t));
   runner = new Runner(device, () => [...devices.values()], engine, () => settings);
@@ -370,10 +440,11 @@ void app.whenReady().then(() => {
   openMain();
   if (fs.existsSync(ICON)) {
     tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
-    tray.setToolTip('Caspar VT');
+    tray.setToolTip('CasparCG Client');
     tray.on('click', openMain);
-    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Show Caspar VT', click: openMain }, { type: 'separator' }, { label: 'Quit', click: () => { quitting = true; app.quit(); } }]));
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Show CasparCG Client', click: openMain }, { type: 'separator' }, { label: 'Quit', click: () => { quitting = true; app.quit(); } }]));
   }
+  setInterval(() => void watchMedia().catch(() => undefined), 8000);
   setInterval(() => { if (win?.isVisible()) win.webContents.send('state', state()); }, 66);
 });
 // Referenced so the tray is not collected.

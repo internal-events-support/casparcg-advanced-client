@@ -1,0 +1,91 @@
+# Builds the Windows exes and adds them to the GitHub Release whenever a version is cut (a v*.*.* tag, pushed or made
+# by creating a release on GitHub). Cut a version with:
+#   npm version <patch|minor|major|x.y.z> && git push --follow-tags
+# Run by hand without a tag for a trial build: the exes are kept on the run and nothing is released.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build, e.g. v1.0.0. Empty = trial build, nothing released'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check tag matches package.json version
+        if: env.TAG != ''
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "$TAG" ] || { echo "::error::Tag $TAG does not match package.json v$v"; exit 1; }
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node test/unit.mjs
+
+      - name: Build exes
+        run: npm run dist
+
+      - name: Check the built app starts
+        shell: pwsh
+        run: |
+          $env:CASPARVT_USERDATA = "$env:RUNNER_TEMP\ud"
+          $p = Start-Process "release\win-unpacked\CasparCG Client.exe" -PassThru
+          $ok = $false
+          foreach ($i in 1..40) {
+            Start-Sleep 1
+            try {
+              $page = (Invoke-WebRequest http://127.0.0.1:8126/ -UseBasicParsing -TimeoutSec 2).Content
+              $js = (Invoke-WebRequest http://127.0.0.1:8126/web.js -UseBasicParsing -TimeoutSec 2).StatusCode
+              $st = (Invoke-WebRequest http://127.0.0.1:8125/status -UseBasicParsing -TimeoutSec 2).Content
+              if ($page -match 'CasparCG Client' -and $js -eq 200 -and $st -match '"connected":false') { $ok = $true; break }
+            } catch { }
+          }
+          if ($p.HasExited) { throw "The app exited with $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { throw 'The app started but its services did not answer' }
+
+      - name: Keep the trial build
+        if: env.TAG == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: CasparCG-Client-trial
+          path: release/*.exe
+          retention-days: 7
+
+      - name: Publish to the GitHub Release
+        if: env.TAG != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/*.exe --clobber
+          else
+            gh release create "$TAG" release/*.exe --verify-tag --title "CasparCG Client $TAG" --generate-notes
+          fi

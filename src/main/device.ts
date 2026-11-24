@@ -227,19 +227,23 @@ export class Device extends EventEmitter {
 
   // ---- library ------------------------------------------------------------------------------------
   async media(): Promise<MediaEntry[]> {
-    const r = await this.cmd('CLS', true);
-    return r.lines.flatMap((l): MediaEntry[] => {
-      const m = /^"(.+)"\s+(MOVIE|STILL|AUDIO)\s+\d+\s+\d+\s+(\d+)\s+(\d+)\/(\d+)/.exec(l);
-      if (!m) return [];
-      const num = Number(m[4]);
-      const den = Number(m[5]);
-      // CLS reports the time base (seconds per frame), so fps is its inverse.
-      const spf = den ? num / den : 0;
-      return [{ name: m[1], type: m[2] as MediaEntry['type'], frames: Number(m[3]), fps: spf ? 1 / spf : 0, seconds: Number(m[3]) * spf }];
-    });
+    return parseCls((await this.cmd('CLS', true)).lines);
+  }
+  /**
+   * The media and template lists straight from the media scanner, for noticing new, renamed and deleted files without
+   * loading the server. Null when the scanner cannot be reached.
+   */
+  async scan(): Promise<{ media: MediaEntry[]; templates: string[] } | null> {
+    const base = (this.cfg.scanner || `http://${this.cfg.host}:8000`).replace(/\/+$/, '');
+    const get = async (p: string) => { const r = await fetch(base + p, { signal: AbortSignal.timeout(5000) }); if (!r.ok) throw new Error(String(r.status)); return (await r.text()).split(/\r?\n/); };
+    try {
+      const [c, t] = await Promise.all([get('/cls'), get('/tls')]);
+      if (!/^200 CLS/.test(c[0]) || !/^200 TLS/.test(t[0])) return null;
+      return { media: parseCls(c), templates: parseTls(t.slice(1)) };
+    } catch { return null; }
   }
   async templates(): Promise<string[]> {
-    return (await this.cmd('TLS', true)).lines.map((l) => (/^"([^"]+)"/.exec(l)?.[1] ?? l.split(/\s+/)[0])).filter(Boolean);
+    return parseTls((await this.cmd('TLS', true)).lines);
   }
   async data(): Promise<string[]> {
     return (await this.cmd('DATA LIST', true)).lines.map((l) => l.replace(/^"|"$/g, '')).filter(Boolean);
@@ -266,4 +270,19 @@ export class Device extends EventEmitter {
       else this.thumbSlots++;
     }
   }
+}
+
+function parseCls(lines: string[]): MediaEntry[] {
+  return lines.flatMap((l): MediaEntry[] => {
+    const m = /^"(.+)"\s+(MOVIE|STILL|AUDIO)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\/(\d+)/.exec(l);
+    if (!m) return [];
+    const num = Number(m[6]);
+    const den = Number(m[7]);
+    // CLS reports the time base (seconds per frame), so fps is its inverse.
+    const spf = den ? num / den : 0;
+    return [{ name: m[1], type: m[2] as MediaEntry['type'], frames: Number(m[5]), fps: spf ? 1 / spf : 0, seconds: Number(m[5]) * spf, size: Number(m[3]), date: m[4] }];
+  });
+}
+function parseTls(lines: string[]): string[] {
+  return lines.map((l) => /^"([^"]+)"/.exec(l)?.[1] ?? l.split(/\s+/)[0]).filter(Boolean);
 }

@@ -1,4 +1,4 @@
-# Caspar VT
+# CasparCG Client
 
 A CasparCG client with playlists, takes between any two channels, and local clip preview. Works with an unmodified CasparCG Server.
 
@@ -7,6 +7,10 @@ A CasparCG client with playlists, takes between any two channels, and local clip
 - **Channels** shows every layer on every channel with transport controls. No channel has a fixed role.
 - **Takes** (cut / fade, with or without play) swap any two layers on any two channels of the same format. Use the Channels tab, a Channel Take item in a rundown, HTTP or OSC. A take from an empty layer is refused.
 - **Preview** plays the clip file on this PC and sends the server nothing, so it works with the server off. Clips the app cannot play directly (ProRes, DNxHD, MKV …) get a small copy made with ffmpeg first. Set in and Set out fill in the item's seek and length. It needs to reach the media folder: found automatically for a server on this PC, otherwise set it in Settings > Servers.
+- **Missing clips** are marked on their rows. The media list is checked every 8 seconds, so a renamed file is noticed by itself and its new name suggested (same size and length = same file). Relinking keeps everything else about the entry.
+- **Copy template** (Ctrl+Shift+C) and apply (Ctrl+Shift+V) copy an entry's settings onto others, except the clip, label, remote ID and story ID.
+- **Shell Command** items run programs on this PC. Off until allowed in Settings > Rundown.
+- **Web interface** (port 8126) controls the open rundowns and channels from a phone or another computer. It needs the access code from Settings > Web Interface, and is limited to this computer until other devices are allowed there.
 - **Remote control** over HTTP (127.0.0.1:8125) and OSC (3250, same addresses as the original client), plus the countdown feed for monitor overlays (8123).
 
 ## Remote control
@@ -25,6 +29,14 @@ The same over OSC under /control, e.g. /control/take/2-10/1-10/cutplay. The addr
     node scripts/build.js
     node_modules/electron/dist/electron.exe .
 
+## Release
+
+    npm version <patch|minor|major|x.y.z>
+    git push --follow-tags
+
+A version tag makes GitHub build the installer and portable exe and add them to that release (.github/workflows/release.yml).
+The exes are not code-signed, so Windows SmartScreen warns the first time.
+
 ## Test
 
     node test/unit.mjs                       # rundown files and every tool's commands
@@ -38,6 +50,8 @@ The same over OSC under /control, e.g. /control/take/2-10/1-10/cutplay. The addr
     src/main/preview.ts   local clip preview
     src/main/commands.ts  the AMCP each tool sends
     src/main/api.ts       HTTP, OSC and countdown services
+    src/main/web.ts       web interface server; src/web/ is its page
+    src/shared/relink.ts  missing clips and finding their new names
     src/shared/tools.ts   every tool and its properties (the inspector is built from this)
     src/ui/               interface, built from GMeet ISO's kit and tokens
 

@@ -16,7 +16,7 @@ export interface ApiHooks {
   playlist: (ref: string, verb: string, n?: number) => Promise<string>;
   legacy: (path: string[]) => Promise<string | null>;
   status: () => unknown;
-  countdown: (channel: number) => { layer: LayerState; next: string };
+  countdown: (channel: number) => { layer: LayerState; at: number; others: { n: number; l: LayerState }[]; next: string };
   log: (kind: 'info' | 'err', text: string) => void;
 }
 export interface LegacyConfig {
@@ -111,9 +111,8 @@ const clock = (n: number) => {
 
 /** Same feed as the earlier countdown helper, so the existing monitor overlays work unchanged. */
 export function startCountdown(cfg: { port: number; caution: number; warn: number; flash: number }, h: ApiHooks, done: (state: string) => void): http.Server {
-  const view = (ch: number) => {
-    const { layer: l, next } = h.countdown(ch);
-    const out = { status: 'idle', level: 'normal', left: '', elapsed: '', total: '', pct: 0, name: l.name.replace(/\\/g, '/').split('/').pop() ?? '', next };
+  const one = (l: LayerState, at: number, next = '') => {
+    const out = { layer: at, status: 'idle', level: 'normal', left: '', elapsed: '', total: '', pct: 0, name: l.name.replace(/\\/g, '/').split('/').pop() ?? '', next };
     if (l.producer === 'empty') return { ...out, name: '' };
     if (!l.end) return { ...out, status: 'nolength' };
     const left = Math.max(0, l.end - l.pos);
@@ -125,6 +124,10 @@ export function startCountdown(cfg: { port: number; caution: number; warn: numbe
     const shown = Math.max(0, Math.ceil(left - 0.02));
     const all = Math.ceil(total - 0.02);
     return { ...out, left: clock(shown), total: clock(all), elapsed: clock(all - shown), pct: Math.round(Math.min(100, (gone / total) * 100) * 10) / 10 };
+  };
+  const view = (ch: number) => {
+    const { layer, at, others, next } = h.countdown(ch);
+    return { ...one(layer, at, next), others: others.map((x) => one(x.l, x.n)) };
   };
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url ?? '/', 'http://x');

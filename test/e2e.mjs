@@ -25,7 +25,7 @@ try {
 	const until = async (f, ms = 4000) => { const t = Date.now(); let v; while (Date.now() - t < ms) { v = await f(); if (v) return v; await sleep(80) } return v }
 	const name = (l) => l.name.toLowerCase()
 	c.ok('connects', (await st()).connected, app.output())
-	c.ok('window has the whole layout', await p.ev(`['.topbar','.library','.preview','.rundown','.channels','.inspector','.bottombar'].every(s=>document.querySelector(s))`))
+	c.ok('window has the whole layout', await p.ev(`['.topbar','.library','.preview','.rundown','.channels','.inspector','.statusbar'].every(s=>document.querySelector(s))`))
 	c.ok('tabs', (await p.ev(`[...document.querySelectorAll('.topbar .segmented button')].map(b=>b.textContent).join()`)) === 'Rundown,Channels,Activity')
 	c.ok('nothing left of a vision mixer', await p.ev(`!/\\b(PGM|PVW|Program|Programme)\\b/.test(document.body.innerText) && !document.querySelector('.monitors,.takes,canvas')`), await p.ev(`document.body.innerText`))
 
@@ -42,7 +42,7 @@ try {
 		+ `<item><type>OSCOUTPUT</type><label>osc</label><output>me</output><path>/hello</path><message>5</message><osctype>Int32</osctype></item><item><type>CUSTOMCOMMAND</type><devicename>Localhost</devicename><label>custom</label><playCommand>MIXER 4-30 OPACITY 0.25</playCommand></item>${mov('pro', 1)}${mov('a2', 1)}</items>`)
 	await p.ev(`vt.call('openPath', ${JSON.stringify(file)}).then(r => { window.__d = r.value; return r.ok })`)
 	// Put it into the app the way File > Open does: through the recent list.
-	await p.ev(`[...document.querySelectorAll('.rd-bar .btn')].find(b=>b.textContent==='File').click()`)
+	await p.ev(`[...document.querySelectorAll('.rd-head .btn')].find(b=>b.textContent==='File').click()`)
 	await sleep(200)
 	await p.ev(`[...document.querySelectorAll('.menu button')].find(b=>b.textContent.includes('show')).click()`)
 	await sleep(700)
@@ -153,9 +153,9 @@ try {
 	await pick('e2', 0); await sleep(200)
 	const numProp = (label, v) => p.ev(`(()=>{const i=${prop(label)}.querySelector('input');i.value='${v}';i.dispatchEvent(new Event('change',{bubbles:true}));return true})()`)
 	await numProp('Seek (frames)', 25); await numProp('Length (frames)', 50); await sleep(400); mk = srv.mark()
-	await http('/playlist/2/play'); await until(async () => name(await oneOff()) === 'e2', 6000); const tA = Date.now(); await until(async () => name(await oneOff()) === 'e3', 4000); const took = Date.now() - tA
+	await http('/playlist/2/play'); await until(async () => name(await oneOff()) === 'e1'); await until(async () => name(await oneOff()) === 'e2', 6000); const tA = Date.now(); await until(async () => name(await oneOff()) === 'e3', 4000); const took = Date.now() - tA
 	c.ok('a trimmed playlist clip is queued trimmed', srv.sent(mk).some((x) => x === 'LOADBG 4-10 "e2" SEEK 25 LENGTH 50 AUTO'), srv.sent(mk))
-	c.ok('and plays for its trimmed length', took > 600 && took < 1600, took)
+	c.ok('and plays for its trimmed length', took > 600 && took < 1600, [took, await oneOff(), srv.sent(mk)])
 	await pick('e2', 0); await numProp('Seek (frames)', 0); await numProp('Length (frames)', 0)
 	await pick('Ends'); await p.key('F1'); await chan(2); await sleep(400); await srv.amcp('CLEAR 4')
 
@@ -264,7 +264,7 @@ try {
 	// --- server restart
 	await srv.stop(); srv = null
 	c.ok('notices the server going', await until(async () => !(await st()).connected, 6000))
-	c.ok('says so on screen', await until(() => p.ev(`/Not connected/.test(document.querySelector('.bottombar').textContent)`), 8000))
+	c.ok('says so on screen', await until(() => p.ev(`/Not connected/.test(document.querySelector('.statusbar').textContent)`), 8000))
 	await pick('pro'); c.ok('preview works with the server off (copy already made)', await until(() => pv('!v.hidden&&v.readyState>=2'), 8000), await p.ev(`document.querySelector('.preview').innerText`))
 	await pick('a1'); c.ok('preview works with the server off (plays directly)', await until(() => pv('!v.hidden&&v.readyState>=2&&Math.abs(v.duration-20)<0.5'), 8000)); await p.key(' '); c.ok('and plays', await until(() => pv('!v.paused&&v.currentTime>0.4'))); await p.key(' ')
 	srv = await startServer(path.join(dir, 'server'), media)
@@ -279,7 +279,7 @@ from ctypes import wintypes as w
 u=ctypes.windll.user32
 def cb(h,l):
     b=ctypes.create_unicode_buffer(99); u.GetWindowTextW(h,b,99)
-    if b.value=='Caspar VT' and u.IsWindowVisible(h): u.PostMessageW(h,0x10,0,0)
+    if b.value=='CasparCG Client' and u.IsWindowVisible(h): u.PostMessageW(h,0x10,0,0)
     return True
 u.EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool,w.HWND,w.LPARAM)(cb),0)`]); await sleep(600)
 	c.ok('closing during a playlist asks first', await until(() => p.ev(`/playlist is on air/i.test(document.querySelector('.sheet')?.textContent ?? '')`), 6000), await p.ev(`document.querySelector('.sheet')?.textContent`))

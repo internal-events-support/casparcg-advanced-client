@@ -1,5 +1,5 @@
 // Renderer state: documents, selection, undo, live state, and calls to the main process.
-import { cloneItem, findItem, isContainer, isPlaylist, newItem, walk } from '../shared/tools';
+import { cloneItem, findItem, isContainer, isPlaylist, newItem, tool, walk } from '../shared/tools';
 import { DEFAULT_SETTINGS, uid, type Action, type AppState, type Doc, type Item, type Library, type LogLine, type MediaEntry, type Settings } from '../shared/types';
 
 interface Bridge { call(name: string, ...a: unknown[]): Promise<{ ok: boolean; value?: unknown; error?: string }>; on(name: string, fn: (...a: never[]) => void): void }
@@ -268,6 +268,35 @@ export function copy(cut = false): void {
 }
 export function paste(): void {
   insert(clip.map(cloneItem));
+}
+// ---- copy template: everything about an entry except what it plays and what it is called
+let template: Item | null = null;
+export const hasTemplate = () => template;
+export function copyTemplate(): void {
+  const s = selected();
+  if (s.length !== 1) { toast('Select the one entry to copy the settings from', 'bad'); return; }
+  template = structuredClone(s[0]);
+  toast(`Template copied from ${template.label}`);
+}
+/** Put the template's settings on an item. The clip, label, remote ID and story ID stay its own. */
+export function stamp(i: Item, t: Item): void {
+  const to = tool(i.type);
+  const same = i.type === t.type;
+  for (const k of ['device', 'channel', 'layer', 'delay', 'duration'] as const) if (to.out.includes(k) && tool(t.type).out.includes(k)) (i as unknown as Record<string, unknown>)[k] = t[k];
+  if (t.color) i.color = t.color; else delete i.color;
+  i.allowGpi = t.allowGpi;
+  i.allowRemote = t.allowRemote;
+  for (const p of to.props) if (p.key in t.props) i.props[p.key] = t.props[p.key];
+  if (same && t.data) i.data = structuredClone(t.data);
+}
+export function applyTemplate(): void {
+  const t = template;
+  if (!t) { toast('Copy a template first (Ctrl+Shift+C)', 'bad'); return; }
+  const ids = selected().filter((i) => i.type !== 'SEPARATOR').map((i) => i.id);
+  if (!ids.length) { toast('Select the entries to apply it to', 'bad'); return; }
+  mutate((root) => walk(root, (i) => { if (ids.includes(i.id)) stamp(i, t); }));
+  emit('select');
+  toast(`Template applied to ${ids.length === 1 ? '1 entry' : `${ids.length} entries`}`);
 }
 export function duplicate(): void {
   insert(selectedTop().map(cloneItem));

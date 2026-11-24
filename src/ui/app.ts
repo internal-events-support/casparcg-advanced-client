@@ -6,7 +6,7 @@ import { buildLibrary } from './library';
 import { buildChannels } from './channels';
 import { buildPreview, previewToggle } from './preview';
 import { buildRundown, closeDoc, setCollapsed } from './rundown';
-import { activate, call, copy, doc, duplicate, emit, execute, homeDevice, moveSelection, newDoc, on, openFiles, paste, removeSelected, save, store, sync, toast, undo, ungroup, visible, vt, wrap } from './store';
+import { activate, applyTemplate, call, copy, copyTemplate, doc, duplicate, emit, execute, homeDevice, moveSelection, newDoc, on, openFiles, paste, removeSelected, save, store, sync, toast, undo, ungroup, visible, vt, wrap } from './store';
 
 type Tab = 'rundown' | 'channels' | 'activity';
 let tab: Tab = 'rundown';
@@ -21,25 +21,9 @@ function showTab(t: Tab): void {
 // ---- top bar ----------------------------------------------------------------------------------------------
 function topBar(): HTMLElement {
   nav = segmented([{ value: 'rundown', label: 'Rundown' }, { value: 'channels', label: 'Channels' }, { value: 'activity', label: 'Activity' }], tab, (v) => showTab(v as Tab));
-  const dot = h('span.dot');
-  const label = h('span', 'Connecting');
-  const pill = h('button.btn.pill.conn', dot, label) as HTMLButtonElement;
-  pill.addEventListener('click', () => {
-    const s = store.state;
-    if (!s) return;
-    const rows = s.devices.map((d) => h('div.group-row', h(`span.dot.${d.connected ? 'ok' : 'bad'}`), h('div.grow', h('div', d.name), h('div.caption', d.connected ? `CasparCG ${d.version}  ·  ${d.channels.length} channels` : d.error || 'Connecting'))));
-    const svc = ([['HTTP remote', s.services.http], ['OSC remote', s.services.osc], ['Countdown feed', s.services.countdown]] as const).map(([n, v]) => h('div.group-row', h(`span.dot.${v.startsWith('On') ? 'ok' : v === 'Off' ? '' : 'warn'}`), h('div.grow', n), h('span.caption', v)));
-    popover(pill, h('div.conn-pop', h('div.group', ...rows), h('div.group', ...svc)), { width: 330, align: 'start' });
-  });
-  on('state', () => {
-    const ds = store.state!.devices;
-    const up = ds.filter((d) => d.connected).length;
-    dot.className = `dot ${up === ds.length ? 'ok' : up ? 'warn' : 'bad'}`;
-    label.textContent = ds.length === 1 ? (up ? ds[0].name : 'Not connected') : `${up} of ${ds.length} servers`;
-  });
   const settings = h('button.btn.pill', icon('gear'), 'Settings') as HTMLButtonElement;
   settings.addEventListener('click', () => void call('openSettings'));
-  return h('header.topbar', h('div.left', h('span.app-title', 'Caspar VT'), pill), h('div.center', nav.el), h('div.right', settings));
+  return h('header.topbar', h('div.left', h('span.app-title', 'CasparCG Client')), h('div.center', nav.el), h('div.right', settings));
 }
 
 // ---- activity ---------------------------------------------------------------------------------------------
@@ -80,33 +64,24 @@ function buildActivity(): HTMLElement {
 
 // ---- bottom bar ---------------------------------------------------------------------------------------------
 function bottomBar(): HTMLElement {
-  const host = h('div.bb-meters');
-  let built = '';
-  let sets: { key: string; bars: HTMLElement[] }[] = [];
-  const title = h('h2', '');
-  const sub = h('span.caption', '');
-  const [c1, c2, c3, c4] = [h('span'), h('span'), h('span'), h('span')];
-  on('state', () => {
-    const s = store.state!;
-    const d = homeDevice();
-    const dev = s.devices.find((x) => x.name === d);
-    const n = Math.min(8, dev?.channels.length ?? 0);
-    // Audio levels, one block per channel of the first server.
-    if (built !== `${d}|${n}`) {
-      built = `${d}|${n}`;
-      sets = [...Array(n)].map((_, k) => ({ key: `${d}|${k + 1}`, bars: [0, 1].map(() => h('i')) }));
-      host.replaceChildren(...sets.map((x, k) => h('div.bb-meter', { title: `Audio on channel ${k + 1}` }, h('div.bb-bars', ...x.bars.map((b) => h('div.meter-v', b))), h('span.caption', String(k + 1)))));
-    }
-    for (const x of sets) x.bars.forEach((b, k) => { const v = s.audio[x.key]?.[k] ?? 0; b.style.height = `${v > 0 ? Math.max(0, Math.min(100, (20 * Math.log10(v) + 60) / 0.6)) : 0}%`; });
-    const playing = Object.values(s.layers).filter((l) => l.producer !== 'empty' && l.end && !l.paused && l.end - l.pos > 0.05).length;
-    title.textContent = !dev?.connected ? 'Not connected' : playing ? `${playing} clip${playing > 1 ? 's' : ''} playing` : 'Nothing playing';
-    sub.textContent = s.decks.length ? s.decks.map((x) => `${x.label} ${x.index + 1}/${x.count} on ${x.channel}-${x.layer}`).join('  ·  ') : '';
-    c1.textContent = `Server: ${dev?.connected ? dev.version.split(' ')[0] : 'offline'}`;
-    c2.textContent = `Channels: ${dev?.channels.length ?? 0}`;
-    c3.textContent = `Playlists loaded: ${s.decks.length}`;
-    c4.textContent = `Remote: ${Object.values(s.services).filter((x) => x.startsWith('On')).length} of 3 on`;
+  const dot = h('span.dot');
+  const label = h('span', 'Connecting');
+  const pill = h('button.btn.pill.conn', { title: 'Servers' }, dot, label) as HTMLButtonElement;
+  pill.addEventListener('click', () => {
+    const s = store.state;
+    if (!s) return;
+    const rows = s.devices.map((d) => h('div.group-row', h(`span.dot.${d.connected ? 'ok' : 'bad'}`), h('div.grow', h('div', d.name), h('div.caption', d.connected ? `CasparCG ${d.version}  ·  ${d.channels.length} channels` : d.error || 'Connecting'))));
+    popover(pill, h('div.conn-pop', h('div.group', ...rows)), { width: 330, align: 'start' });
   });
-  return h('footer.bottombar', host, h('div.rf-title', title, sub), h('div.rf-spacer'), h('div.rf-stats', h('div.col', c1, c2), h('div.col', c3, c4)), h('div.rf-right', h('div.version', h('span', __APP_VERSION__))));
+  on('state', () => {
+    const ds = store.state!.devices;
+    const up = ds.filter((d) => d.connected).length;
+    const cls = `dot ${up === ds.length ? 'ok' : up ? 'warn' : 'bad'}`;
+    const text = ds.length === 1 ? (up ? ds[0].name : 'Not connected') : `${up} of ${ds.length} servers`;
+    if (dot.className !== cls) dot.className = cls;
+    if (label.textContent !== text) label.textContent = text;
+  });
+  return h('footer.statusbar', pill, h('span.spacer'), h('span', __APP_VERSION__));
 }
 
 // ---- keyboard ---------------------------------------------------------------------------------------------------
@@ -150,6 +125,8 @@ function keys(e: KeyboardEvent): void {
   if (e.key === ' ') { done(); if (!e.repeat) previewToggle(); return; }
   if (tab === 'activity') return;
   if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { done(); void act(e.key === 'ArrowLeft' ? 'back' : 'forward'); return; }
+  if (ctrl && e.shiftKey && k === 'c') { done(); copyTemplate(); return; }
+  if (ctrl && e.shiftKey && k === 'v') { done(); applyTemplate(); return; }
   if (ctrl && k === 'c') { done(); copy(); return; }
   if (ctrl && k === 'x') { done(); copy(true); return; }
   if (ctrl && k === 'v') { done(); paste(); return; }
@@ -216,7 +193,7 @@ async function askQuit(playing: string[]): Promise<void> {
     playing.length ? `${playing.join(', ')} ${playing.length > 1 ? 'are' : 'is'} playing. If you quit, ${playing.length > 1 ? 'each stops' : 'it stops'} after the clip that is already queued.` : '',
     dirty.length ? `${dirty.map((d) => d.name).join(', ')} ${dirty.length > 1 ? 'have' : 'has'} unsaved changes. They are kept and reopen next time.` : '',
   ].filter(Boolean);
-  const layer = h('div.sheet-layer', h('div.sheet.wide', h('h3', playing.length ? 'A playlist is on air' : 'Quit Caspar VT?'), ...parts.map((p) => h('p', p)),
+  const layer = h('div.sheet-layer', h('div.sheet.wide', h('h3', playing.length ? 'A playlist is on air' : 'Quit CasparCG Client?'), ...parts.map((p) => h('p', p)),
     h('div.actions', button('Cancel', done), playing.length ? button('Keep running hidden', () => { done(); void call('hide'); }, 'primary') : null, button('Quit', () => { done(); void call('quit'); }, playing.length ? 'danger' : 'primary'))));
   document.body.append(layer);
 }

@@ -20,7 +20,7 @@ const strip = (x) => JSON.parse(JSON.stringify(x, (k, v) => (k === 'id' ? undefi
 const all = TOOLS.map((t) => newItem(t.type, { label: `A & <b> "${t.label}"`, name: 'DIR/clip, one', device: 'Localhost', channel: 3, layer: 12, delay: 250, duration: 4000, allowRemote: true, remoteId: 'r1', storyId: 's', color: '#4673c3', ...(t.data ? { data: [{ key: 'f0', value: 'x < y & "z"' }] } : {}), ...(t.type === 'GROUP' || t.type === 'PLAYLIST' ? { name: t.label, items: [newItem('MOVIE', { name: 'a', label: 'a', props: { autoplay: true } })], expanded: false } : {}) }))
 const xml = writeRundown(all, true)
 const back = parseRundown(xml)
-c.ok('tool count (39 original tools, group, playlist, channel take)', TOOLS.length === 42, TOOLS.length)
+c.ok('tool count (39 original tools, group, playlist, channel take, shell command)', TOOLS.length === 43, TOOLS.length)
 for (const [i, t] of TOOLS.entries()) {
 	const a = strip(all[i])
 	if (t.type === 'GROUP' || t.type === 'PLAYLIST') { a.name = back.items[i].name; if (t.type === 'GROUP') a.device = back.items[i].device }

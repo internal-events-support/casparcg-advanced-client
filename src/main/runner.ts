@@ -1,6 +1,9 @@
 // Executes rundown items: delays, durations, groups, playlists, HTTP/OSC tools and per-item state.
+import { spawn, type ChildProcess } from 'node:child_process';
 import dgram from 'node:dgram';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
 import { findItem, isPlaylist, walk } from '../shared/tools';
 import { stem, type Action, type Doc, type Item, type Loc, type Settings } from '../shared/types';
 import { commandsFor, previewCommands, type Run } from './commands';
@@ -17,6 +20,7 @@ export class Runner extends EventEmitter {
   docs = new Map<string, Doc>();
   private rt = new Map<string, Rt>();
   private queues: GroupQueue[] = [];
+  private shells = new Map<string, ChildProcess>();
   private udp = dgram.createSocket('udp4');
 
   constructor(private device: (n: string) => Device | undefined, private devices: () => Device[], private engine: Engine, private settings: () => Settings) {
@@ -129,6 +133,9 @@ export class Runner extends EventEmitter {
       if (starts) this.emit('playout', String(i.props.playoutcommand));
     } else if (i.type === 'CGTAKE') {
       if (starts) await this.take(i);
+    } else if (i.type === 'SHELL') {
+      if (starts) this.shell(i, 'cgshell');
+      else if (a === 'stop') { this.endShell(i.id); if (i.props.cgshellstop) this.shell(i, 'cgshellstop'); }
     } else if (i.type === 'GPIOUTPUT') {
       if (starts) throw new Refused('GPI output is not supported in this app');
     } else await this.send(i, commandsFor(i, a, r));
@@ -156,6 +163,41 @@ export class Runner extends EventEmitter {
     }
     const key = this.engine.key(i.device, i.channel, i.layer);
     this.queues = this.queues.filter((x) => (whole ? !x.key.startsWith(`${i.device}|${i.channel}-`) : x.key !== key));
+  }
+
+  // ---- programs on this PC ------------------------------------------------------------------------------
+  private shell(i: Item, key: 'cgshell' | 'cgshellstop'): void {
+    const cmd = String(i.props[key] ?? '').trim();
+    if (!this.settings().allowShell) throw new Refused('Shell commands are off. Turn them on in Settings, Rundown');
+    if (!cmd) throw new Refused(`${i.label}: there is no command to run`);
+    const dir = String(i.props.cgshelldir ?? '').trim() || os.homedir();
+    if (!fs.existsSync(dir)) throw new Refused(`${i.label}: the folder ${dir} does not exist`);
+    if (key === 'cgshell') this.endShell(i.id);
+    // Several lines run one after another, stopping at the first that fails.
+    const line = cmd.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).join(' && ');
+    const c = spawn(line, { shell: true, cwd: dir, windowsHide: true });
+    let tail = '';
+    const take = (d: Buffer) => { tail = (tail + String(d)).slice(-2000); };
+    c.stdout?.on('data', take);
+    c.stderr?.on('data', take);
+    this.emit('log', 'info', `${i.label}: running ${line}`);
+    if (key === 'cgshell') this.shells.set(i.id, c);
+    c.on('error', (e) => this.emit('problem', new Error(`${i.label}: ${e.message}`)));
+    c.on('close', (code) => {
+      const ours = this.shells.get(i.id) === c;
+      if (ours) { this.shells.delete(i.id); this.of(i.id).playing = false; }
+      const last = tail.trim().split(/\r?\n/).pop()?.trim() ?? '';
+      if (code === 0) this.emit('log', 'info', `${i.label}: finished${last ? `: ${last.slice(0, 200)}` : ''}`);
+      // Ended by Stop: not a failure.
+      else if (ours || key === 'cgshellstop') this.emit('problem', new Error(`${i.label} failed${code === null ? '' : ` (${code})`}${last ? `: ${last.slice(0, 200)}` : ''}`));
+    });
+  }
+  private endShell(id: string): void {
+    const c = this.shells.get(id);
+    if (!c?.pid) return;
+    this.shells.delete(id);
+    if (process.platform === 'win32') spawn('taskkill', ['/PID', String(c.pid), '/T', '/F'], { windowsHide: true });
+    else c.kill();
   }
 
   private take(i: Item): Promise<string> {
@@ -343,6 +385,8 @@ export class Runner extends EventEmitter {
         } else if (i.type === 'MOVIE' || i.type === 'AUDIO') {
           const l = this.engine.layer(i.device, i.channel, i.layer);
           if (r && (r.playing || r.loaded || r.paused) && l.name && stem(l.name) === stem(i.name)) state = this.clipState(i.device, i.channel, i.layer);
+        } else if (i.type === 'SHELL') {
+          if (this.shells.has(i.id)) state = 'playing';
         } else if (r) {
           const onAir = STICKY.includes(i.type) && this.engine.layer(i.device, i.channel, i.layer).producer !== 'empty';
           state = r.loaded ? 'loaded' : r.playing && onAir ? (r.paused ? 'paused' : 'playing') : '';

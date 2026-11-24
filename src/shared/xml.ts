@@ -35,7 +35,7 @@ export function parseXml(src: string): Node {
   return root;
 }
 
-const BASE = ['type', 'devicename', 'label', 'name', 'channel', 'videolayer', 'delay', 'duration', 'allowgpi', 'allowremotetriggering', 'remotetriggerid', 'storyid', 'color', 'expanded', 'items', 'cgplaylist', 'cgtake'];
+const BASE = ['type', 'devicename', 'label', 'name', 'channel', 'videolayer', 'delay', 'duration', 'allowgpi', 'allowremotetriggering', 'remotetriggerid', 'storyid', 'color', 'expanded', 'items', 'cgplaylist', 'cgtake', 'cgshellitem'];
 const DATA_TAGS = ['templatedata', 'httpdata'];
 
 function readData(n: Node): KV[] {
@@ -53,6 +53,7 @@ function readItem(n: Node): Item {
   let type = get('type') ?? 'SEPARATOR';
   if (type === 'GROUP' && bool('cgplaylist')) type = 'PLAYLIST';
   if (type === 'CUSTOMCOMMAND' && bool('cgtake')) type = 'CGTAKE';
+  if (type === 'CUSTOMCOMMAND' && bool('cgshellitem')) type = 'SHELL';
   const t = tool(type);
   const item = newItem(type, {
     label: get('label') ?? '', name: get('name') ?? '', device: get('devicename') ?? '', channel: num('channel', 1), layer: num('videolayer', t.layer ?? 10),
@@ -65,7 +66,7 @@ function readItem(n: Node): Item {
     const p = t.props.find((x) => x.key === k.tag);
     if (p) item.props[p.key] = p.kind === 'bool' ? k.text === 'true' : p.kind === 'num' || p.kind === 'int' || p.kind === 'pct' ? (Number.isFinite(Number(k.text)) && k.text !== '' ? Number(k.text) : p.def) : k.text;
     else if (DATA_TAGS.includes(k.tag)) item.data = readData(k);
-    else if (!BASE.includes(k.tag) && !k.kids.length && !['autostep', 'autoplay', 'transtitionDuration'].includes(k.tag) && !(type === 'CGTAKE' && (k.tag.endsWith('Command') || k.tag === 'triggeronnext'))) extra[k.tag] = k.text;
+    else if (!BASE.includes(k.tag) && !k.kids.length && !['autostep', 'autoplay', 'transtitionDuration'].includes(k.tag) && !((type === 'CGTAKE' || type === 'SHELL') && (k.tag.endsWith('Command') || k.tag === 'triggeronnext'))) extra[k.tag] = k.text;
   }
   // Older files used a misspelt tag; the original still reads it.
   const old = get('transtitionDuration');
@@ -91,7 +92,7 @@ export function writeRundown(items: Item[], allowRemote: boolean): string {
     const pad = '    '.repeat(d);
     const pl = i.type === 'PLAYLIST';
     out.push(`${pad}<item>`);
-    tag(d + 1, 'type', pl ? 'GROUP' : i.type === 'CGTAKE' ? 'CUSTOMCOMMAND' : i.type);
+    tag(d + 1, 'type', pl ? 'GROUP' : i.type === 'CGTAKE' || i.type === 'SHELL' ? 'CUSTOMCOMMAND' : i.type);
     if (!isContainer(i) || pl) tag(d + 1, 'devicename', i.device);
     tag(d + 1, 'label', i.label);
     if (isContainer(i)) tag(d + 1, 'expanded', i.expanded !== false);
@@ -101,6 +102,7 @@ export function writeRundown(items: Item[], allowRemote: boolean): string {
     for (const p of tool(i.type).props) tag(d + 1, p.key, i.props[p.key] ?? p.def);
     if (pl) { tag(d + 1, 'autostep', false); tag(d + 1, 'autoplay', true); tag(d + 1, 'cgplaylist', true); }
     if (i.type === 'CGTAKE') { tag(d + 1, 'playCommand', `SWAP ${i.props.cgttochannel}-${i.props.cgttolayer} ${i.props.cgtfromchannel}-${i.props.cgtfromlayer}`); tag(d + 1, 'cgtake', true); }
+    if (i.type === 'SHELL') tag(d + 1, 'cgshellitem', true);
     for (const [k, v] of Object.entries(i.extra ?? {})) tag(d + 1, k, v);
     if (i.color) tag(d + 1, 'color', i.color);
     const dataTag = tool(i.type).data;

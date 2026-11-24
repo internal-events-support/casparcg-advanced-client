@@ -26,13 +26,36 @@ export function buildPreview(): HTMLElement {
   const scrub = h('input.mon-scrub', { type: 'range', min: '0', max: '1000', value: '0', title: 'Scrub' }) as HTMLInputElement;
   const play = iconButton('play', () => toggle(), 'Play / pause (Space)', 'mon-play');
   const loop = iconButton('loop', () => { video.loop = !video.loop; loop.classList.toggle('active', video.loop); }, 'Loop', 'plain');
-  const mute = iconButton('speaker', () => { video.muted = !video.muted; try { localStorage.setItem('vt.previewMuted', String(video.muted)); } catch { /* not kept */ } paintMute(); }, 'Preview sound', 'plain');
+  const mute = iconButton('speaker', () => { if (gone && video.muted) return toast(`${store.settings.previewOutput} is not connected`, 'bad'); video.muted = !video.muted; try { localStorage.setItem('vt.previewMuted', String(video.muted)); } catch { /* not kept */ } paintMute(); }, 'Preview sound', 'plain');
   const markIn = h('button.btn.sm', { title: 'Start the clip here' }, 'Set in') as HTMLButtonElement;
   const markOut = h('button.btn.sm', { title: 'End the clip here' }, 'Set out') as HTMLButtonElement;
   const clear = h('button.btn.sm', { title: 'Play the whole clip' }, 'Clear') as HTMLButtonElement;
   const marks = h('div.pv-marks', markIn, markOut, clear, h('span.spacer'), range);
   const step = (n: number) => { if (!cur || cur.kind === 'image') return; video.pause(); video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + n / (cur.fps || 25) + 0.0005)); };
   const keys = h('div.mon-keys', iconButton('prev', () => { video.currentTime = itemIn(); }, 'Go to in point'), iconButton('stepBack', () => step(-1), 'Back one frame'), play, iconButton('stepFwd', () => step(1), 'Forward one frame'), loop, mute);
+
+  // Play on the sound output chosen in Settings. If it is unplugged, stay silent rather than come out somewhere else.
+  async function sound(): Promise<void> {
+    const want = store.settings.previewOutput;
+    const set = (id: string) => (video as HTMLVideoElement & { setSinkId(id: string): Promise<void> }).setSinkId(id);
+    try {
+      if (!want) return void (await set(''));
+      const d = (await navigator.mediaDevices.enumerateDevices()).find((x) => x.kind === 'audiooutput' && x.label === want);
+      if (d) { await set(d.deviceId); gone = false; return; }
+    } catch { /* handled below */ }
+    if (!gone) toast(`Preview sound is off: ${want} is not connected`, 'bad');
+    gone = true;
+    video.muted = true;
+  }
+  let gone = false;
+  let was: string | null = null;
+  const check = () => { if (store.settings.previewOutput !== was) { was = store.settings.previewOutput; void sound(); } };
+  on('settings', check);
+  navigator.mediaDevices.addEventListener('devicechange', () => void sound());
+  check();
+
+  const controls = h('div.pv-ctl', h('div.pv-line', tc, scrub, dur), keys);
+  const root = h('section.preview', { hidden: true }, h('div.in-head', h('span.in-title', 'Preview'), name, h('span.spacer'), info), h('div.pv-body', well, controls, marks));
 
   let cur: Info | null = null;
   let key = '';
@@ -57,7 +80,7 @@ export function buildPreview(): HTMLElement {
   };
 
   function toggle(): void {
-    if (!cur || cur.kind === 'image') return;
+    if (root.hidden || !cur || cur.kind === 'image') return;
     if (video.paused) {
       if (video.currentTime >= itemOut() - 0.05) video.currentTime = itemIn();
       void video.play().catch(() => undefined);
@@ -130,8 +153,10 @@ export function buildPreview(): HTMLElement {
   show = (device, clip, it) => {
     item = it;
     const k = `${device}|${clip.toLowerCase()}`;
-    if (k === key) { paintMarks(); return; }
+    if (k === key) { root.hidden = false; paintMarks(); return; }
     key = k;
+    root.hidden = false;
+    controls.hidden = false;
     const mine = ++ticket;
     reset();
     name.textContent = clip.replace(/\\/g, '/').split('/').pop()!;
@@ -141,8 +166,9 @@ export function buildPreview(): HTMLElement {
     timer = window.setTimeout(async () => {
       const r = await vt.call('previewOpen', device, clip);
       if (mine !== ticket) return;
-      if (!r.ok) { if (r.error) say(r.error); prog.hidden = true; key = ''; return; }
+      if (!r.ok) { if (r.error) say(r.error); prog.hidden = true; controls.hidden = true; key = ''; return; }
       cur = r.value as Info;
+      controls.hidden = cur.kind === 'image'; // nothing to play or scrub
       prog.hidden = true;
       say('');
       info.textContent = [cur.width ? `${cur.width}×${cur.height}` : '', cur.fps ? `${Math.round(cur.fps * 100) / 100} fps` : '', cur.codec.toUpperCase(), cur.alpha ? 'alpha' : ''].filter(Boolean).join('  ');
@@ -157,14 +183,29 @@ export function buildPreview(): HTMLElement {
     }, 180);
   };
 
+  /** Put the whole preview away and stop what it was doing. */
+  function hide(): void {
+    root.hidden = true;
+    ticket++;
+    clearTimeout(timer);
+    key = '';
+    item = undefined;
+    reset();
+    void vt.call('previewCancel');
+  }
+  let last = '';
   const follow = () => {
     const s = selected();
-    if (s.length !== 1) return;
-    const i = s[0].type === 'PLAYLIST' || s[0].type === 'GROUP' ? undefined : s[0];
-    if (i && ['MOVIE', 'STILL', 'AUDIO', 'IMAGESCROLLER'].includes(i.type)) show!(i.device || homeDevice(), i.name, i);
+    const ids = s.map((x) => x.id).join();
+    const i = s.length === 1 && ['MOVIE', 'STILL', 'AUDIO', 'IMAGESCROLLER'].includes(s[0].type) ? s[0] : undefined;
+    if (i) show!(i.device || homeDevice(), i.name, i);
+    // Only when the selection really changed: an edit elsewhere should not close a clip opened from the library.
+    else if (ids !== last && !root.hidden) hide();
+    last = ids;
   };
   on('select', follow);
   on('doc', () => { if (item && !doc()?.items.length) item = undefined; paintMarks(); });
   reset();
-  return h('section.preview', h('div.in-head', h('span.in-title', 'Preview'), name, h('span.spacer'), info), h('div.pv-body', well, h('div.pv-line', tc, scrub, dur), keys, marks));
+  follow();
+  return root;
 }

@@ -110,6 +110,8 @@ export const ICONS: Record<string, string> = {
   holdNext: S('<rect x="1.2" y="4.6" width="4.2" height="6.8" rx="1"/><rect x="11" y="4.6" width="3.8" height="6.8" rx="1"/><path d="M7.4 5.4v5.2M9.2 5.4v5.2"/>'),
   stopEnd: S('<path d="M1.8 8h8.6M7.2 4.8 10.4 8l-3.2 3.2M13.6 3.4v9.2"/>'),
   autoStep: S('<path d="M2.5 4h11M2.5 12.5h11M8 5.6v4.6M6 8.4l2 2 2-2"/>'),
+  template2: S('<rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5M7.5 8h4M7.5 11h2.5"/>'),
+  apply: S('<path d="M9.5 2.2 13.8 6.5 8 12.3l-4.6 1.5 1.3-4.8zM2 14.5h12"/>'),
   stepBack: S('<path d="m9.5 4-4 4 4 4"/><path d="M12.5 4v8"/>'),
   stepFwd: S('<path d="m6.5 4 4 4-4 4"/><path d="M3.5 4v8"/>'),
   cue: S('<path d="M8 2v7M5 6.5 8 9.5l3-3"/><path d="M2.5 10.5v3h11v-3"/>'),

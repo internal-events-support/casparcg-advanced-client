@@ -3,7 +3,7 @@ import { newItem, TOOLS } from '../shared/tools';
 import type { Item, Library, MediaEntry } from '../shared/types';
 import { button, confirmSheet, h, icon, iconButton, menu, popup, promptSheet, segmented, textField } from './kit';
 import { previewClip } from './preview';
-import { call, clock, homeDevice, insert, itemFromMedia, on, playlists, selectedTop, store, thumb, toast, wrap } from './store';
+import { call, clock, hasTemplate, homeDevice, insert, itemFromMedia, stamp, on, playlists, selectedTop, store, thumb, toast, wrap } from './store';
 
 type Tab = 'media' | 'templates' | 'tools' | 'data' | 'presets';
 let tab: Tab = 'media';
@@ -91,6 +91,7 @@ export function buildLibrary(): HTMLElement {
         { label: c.length > 1 ? `Add ${c.length} to rundown` : 'Add to rundown', icon: 'plus', onClick: () => insert(c.map(itemFromMedia)) },
         { label: 'Preview', icon: 'preview', disabled: c.length > 1, onClick: () => previewClip(device, m.name) },
         null,
+        ...(hasTemplate() ? [{ label: `Add using template from ${hasTemplate()!.label}`, icon: 'apply', onClick: () => insert(c.map((x) => { const i = itemFromMedia(x); stamp(i, hasTemplate()!); return i; })) }] : []),
         { label: 'New playlist from selection', icon: 'playlist', disabled: !vids.length, onClick: () => newPlaylist(vids) },
         ...playlists().filter((p) => p.doc.id === store.active).slice(0, 8).map((p) => ({ label: `Add to ${p.item.label}`, icon: 'playlist', disabled: !vids.length, onClick: () => insert(vids.map(itemFromMedia), { parent: p.item.id, index: p.item.items!.length }) })),
       ]);
