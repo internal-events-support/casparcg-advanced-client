@@ -82,6 +82,7 @@ export const ICONS: Record<string, string> = {
   mute: S('<path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="m11 6 3.5 4M14.5 6 11 10"/>'),
   eyeSlash: S('<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path d="M2 2l12 12"/>'),
   folder: S('<path d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.5H13c.7 0 1.2.5 1.2 1.2v6.1c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2z"/>'),
+  download: S('<path d="M8 2v8.2M4.6 7 8 10.4 11.4 7M2.8 13.6h10.4"/>'),
   refresh: S('<path d="M13.5 8A5.5 5.5 0 1 1 11.8 4M13.5 2v3.3h-3.3"/>'),
   search: S('<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/>'),
   monitor: S('<rect x="1.5" y="2.5" width="13" height="9" rx="1.2"/><path d="M5 14h6"/>'),

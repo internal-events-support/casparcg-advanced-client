@@ -17,11 +17,13 @@ import { carryOver, OLD_FOLDER } from './migrate';
 import { pickMain, startOverlay, type OverlayView } from './overlay';
 import { Preview } from './preview';
 import { Runner } from './runner';
+import { mayStart, RELEASES, Updater } from './update';
 import { addresses, Web, type Client, type WebHooks } from './web';
 
 const ownFolder = process.env.CASPARCG_ADVANCED_USERDATA;
 app.setPath('userData', ownFolder || path.join(app.getPath('appData'), 'CasparCG Advanced Client'));
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!mayStart()) app.exit(0);
+else if (!app.requestSingleInstanceLock()) app.quit();
 else if (!ownFolder) {
   const old = path.join(app.getPath('appData'), OLD_FOLDER);
   const failed = carryOver(old, app.getPath('userData'));
@@ -85,6 +87,8 @@ const device = (n: string) => devices.get(n);
 let engine: Engine;
 let runner: Runner;
 let preview: Preview;
+let updater: Updater;
+let updateNow = false;
 const library: Record<string, Library> = {};
 
 function syncDevices(): void {
@@ -386,7 +390,7 @@ function checkSettings(c: Client, patch: Partial<Settings>): void {
   if (c.local) return;
   const differs = (k: keyof Settings) => k in patch && JSON.stringify(patch[k]) !== JSON.stringify(settings[k]);
   const folders = (l: Settings['devices']) => l.filter((d) => d.media).map((d) => JSON.stringify([d.name, d.media]));
-  if (differs('allowShell') || differs('ffmpeg') || differs('web') || (patch.devices && folders(patch.devices).some((x) => !folders(settings.devices).includes(x)))) throw new Refused('That can only be changed on the show PC');
+  if (differs('allowShell') || differs('ffmpeg') || differs('web') || differs('autoUpdate') || (patch.devices && folders(patch.devices).some((x) => !folders(settings.devices).includes(x)))) throw new Refused('That can only be changed on the show PC');
 }
 /** Folders a browser may open rundowns from and save them to: the ones already in use here. */
 function rundownDirs(): string[] {
@@ -504,6 +508,12 @@ const handlers: Record<string, (...a: never[]) => unknown> = {
   deviceStates: () => state().devices,
   browseFolder: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { properties: ['openDirectory'] }); return r.filePaths[0] ?? ''; },
   browseExe: async () => { const r = await dialog.showOpenDialog(settingsWin ?? win!, { title: 'Choose ffmpeg.exe', filters: [{ name: 'ffmpeg', extensions: ['exe'] }], properties: ['openFile'] }); return r.filePaths[0] ?? ''; },
+  update: () => updater.state(),
+  updateCheck: () => updater.check(),
+  updatePage: () => shell.openExternal(updater.state().ready ? `${RELEASES}/tag/v${updater.state().ready}` : `${RELEASES}/latest`),
+  /** Ask in the main window, with what is on air. */
+  updateAsk: () => { settingsWin?.close(); openMain(); win!.webContents.send('askupdate', engine.needed().map((d) => d.label)); },
+  updateInstall: () => { if (!updater.state().ready) throw new Refused('There is no update to install'); updateNow = quitting = true; app.quit(); },
   quit: () => { quitting = true; app.quit(); },
   hide: () => win?.hide(),
 };
@@ -514,7 +524,7 @@ const store = (doc: Doc, f: string) => {
   return { path: f, name: path.basename(f).replace(/\.xml$/i, '') };
 };
 /** Needs a window on this PC, so not for a browser. */
-const PC_ONLY = new Set(['open', 'browseFolder', 'browseExe', 'webOpen', 'openSettings', 'quit', 'hide']);
+const PC_ONLY = new Set(['open', 'browseFolder', 'browseExe', 'webOpen', 'openSettings', 'updateCheck', 'updatePage', 'updateAsk', 'updateInstall', 'quit', 'hide']);
 
 async function dispatch(c: Client, name: string, args: unknown[]): Promise<{ ok: boolean; value?: unknown; error?: string }> {
   const h = Object.hasOwn(handlers, name) ? (handlers[name] as (...a: unknown[]) => unknown) : undefined;
@@ -567,6 +577,8 @@ app.on('before-quit', () => {
   if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; writeSafe(ud('session.json'), JSON.stringify([...runner.docs.values()])); }
   preview?.cancel();
 });
+// Last of all, so that nothing is left to do. Not sent when Windows is shutting down.
+app.on('quit', (_e, code) => { if (!code) try { updater?.quit(updateNow); } catch { /* it is still there for next time */ } });
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'vtmedia', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
 
@@ -587,6 +599,13 @@ void app.whenReady().then(() => {
   for (const [, v] of autoMedia) { const ff = path.join(path.dirname(v), 'ffmpeg.exe'); if (fs.existsSync(ff)) autoFfmpeg = ff; }
   runner.docs = new Map(loadSession().map((d) => [d.id, d]));
   for (const d of runner.docs.values()) { revs.set(d.id, nextRev()); for (const i of flat(d.items)) if (i.type === 'SHELL') knownShell.add(shellOf(i)); }
+  updater = new Updater({
+    automatic: () => settings.autoUpdate,
+    busy: () => engine.needed().length > 0,
+    changed: (s) => { win?.webContents.send('update', s); settingsWin?.webContents.send('update', s); },
+    log: (dir, t) => log(dir, 'Update', t),
+  });
+  updater.start();
   syncDevices();
   syncServices();
   openMain();

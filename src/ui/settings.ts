@@ -1,5 +1,5 @@
 // Settings window (same layout as Google Meet ISO's): sidebar plus grouped rows. Every control saves straight away.
-import type { DeviceState, Settings } from '../shared/types';
+import type { DeviceState, Settings, UpdateState } from '../shared/types';
 import { h, icon, iconButton, popup, toggle, type Child } from './kit';
 import { toast, vt } from './store';
 
@@ -97,11 +97,28 @@ const PANES: Record<string, { label: string; icon: string; build: () => Promise<
     }),
     h('div.s-row', sbtn('Add target', () => void set({ oscOutputs: [...s.oscOutputs, { name: `Target ${s.oscOutputs.length + 1}`, host: '127.0.0.1', port: 7250 }] }).then(render))),
   ], 'Where OSC Output items can send to.')] },
+  updates: { label: 'Updates', icon: 'download', build: async () => {
+    const u = await call<UpdateState>('update');
+    const at = new Date(u.checked).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    const state = !u.installed ? 'This copy was not installed, so it cannot update itself'
+      : u.activity === 'checking' ? 'Checking…' : u.activity === 'downloading' ? `Downloading… ${u.percent}%`
+      : u.error || (u.ready ? `Version ${u.ready} is ready${s.autoUpdate ? '. It is installed when you quit' : ''}` : u.checked ? `Up to date, checked ${at}` : 'Not checked yet');
+    const check = sbtn('Check for updates', () => void call('updateCheck'));
+    check.disabled = !!u.activity;
+    const page = sbtn(u.installed ? 'What’s new' : 'Get the installer', () => void call('updatePage'));
+    return [section('Updates', [
+      row(`CasparCG Advanced Client ${u.version}`, u.installed ? [page, check, u.ready && !u.activity ? sbtn('Update now', () => void call('updateAsk')) : null] : page, state),
+      u.installed ? row('Update automatically', tog(s.autoUpdate, (v) => void set({ autoUpdate: v }).then(render)), 'Downloads new versions in the background and installs them when you quit') : null,
+    ], 'The app never updates while it is running or as it starts, only when you quit or press Update.')];
+  } },
   keys: { label: 'Shortcuts', icon: 'bolt', build: () => [['Playing', [['F1', 'Stop'], ['F2', 'Play'], ['Shift+F2', 'Play now'], ['F3', 'Load'], ['F4', 'Pause / resume'], ['F5', 'Next'], ['Shift+F5', 'Previous (playlists)'], ['F6', 'Update'], ['F7', 'Invoke'], ['F8', 'Preview'], ['F10', 'Clear'], ['F11', 'Clear layer'], ['F12', 'Clear channel'], ['U', 'Mark as used / unused (Show)']]],
     ['Clips', [['Space', 'Play / pause the local preview'], ['I / O', 'Set the in / out point'], ['Shift+I / O', 'Go to the in / out point'], ['Left / Right', 'Step one frame (Shift: ten)'], ['Alt+Left / Right', 'Back / forward on the server']]],
     ['Editing', [['Ctrl+Z / Ctrl+Y', 'Undo / redo'], ['Ctrl+C / X / V', 'Copy / cut / paste'], ['Ctrl+E', 'Switch between Edit and Show'], ['Ctrl+D', 'Duplicate'], ['Ctrl+Shift+C / V', 'Copy / apply template'], ['Ctrl+G', 'Group'], ['Ctrl+Shift+G', 'Ungroup'], ['Ctrl+P', 'Make playlist'], ['Ctrl+[ / ]', 'Collapse / expand all'], ['Delete', 'Delete']]],
     ['Files', [['Ctrl+N', 'New'], ['Ctrl+O', 'Open'], ['Ctrl+S', 'Save'], ['Ctrl+Shift+S', 'Save as'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'], ['Ctrl+F', 'Search library']]]].map(([t, r]) => section(t as string, (r as string[][]).map(([k, l]) => row(l, h('kbd', k))))) },
 };
+
+if (away) delete PANES.updates;
+else vt.on('update', (() => { if (pane === 'updates') void render(); }) as never);
 
 let timer = 0;
 /** Service status settles a moment after a port changes. */

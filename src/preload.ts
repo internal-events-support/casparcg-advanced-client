@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-const CHANNELS = ['docs', 'state', 'previewProgress', 'log', 'library', 'toast', 'settings', 'playout', 'rundown', 'askquit'];
+const CHANNELS = ['docs', 'state', 'previewProgress', 'log', 'library', 'toast', 'settings', 'playout', 'rundown', 'askquit', 'update', 'askupdate'];
 contextBridge.exposeInMainWorld('vt', {
   call: (name: string, ...args: unknown[]) => ipcRenderer.invoke('vt', name, ...args),
   on: (name: string, fn: (...a: unknown[]) => void) => {

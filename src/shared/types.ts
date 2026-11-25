@@ -105,6 +105,8 @@ export interface Settings {
   countdown: { enabled: boolean; port: number; caution: number; warn: number; flash: number };
   oscOutputs: { name: string; host: string; port: number }[];
   recent: string[];
+  /** Download new versions in the background and install them when the app quits. */
+  autoUpdate: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -123,6 +125,7 @@ export const DEFAULT_SETTINGS: Settings = {
   countdown: { enabled: true, port: 8123, caution: 30, warn: 10, flash: 5 },
   oscOutputs: [],
   recent: [],
+  autoUpdate: true,
 };
 
 export interface MediaEntry { name: string; type: 'MOVIE' | 'STILL' | 'AUDIO'; frames: number; fps: number; seconds: number; size: number; date: string }
@@ -178,6 +181,19 @@ export interface AppState {
   items: Record<string, { state: 'loaded' | 'playing' | 'paused' | ''; used: boolean }>;
   services: { http: string; osc: string; countdown: string; web: string };
   busy: boolean;
+}
+
+export interface UpdateState {
+  /** Installed, so it can update itself. */
+  installed: boolean;
+  version: string;
+  activity: '' | 'checking' | 'downloading';
+  percent: number;
+  /** The version that is downloaded and can be installed. */
+  ready: string;
+  /** When it last looked. 0 = not yet. */
+  checked: number;
+  error: string;
 }
 
 export interface LogLine { t: number; dir: 'out' | 'in' | 'info' | 'err'; device: string; text: string }

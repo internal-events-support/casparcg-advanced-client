@@ -1,5 +1,5 @@
 // App shell: top bar, tabs, status bar and keyboard. Edit has the library, preview and inspector, Show has the preview and details; the other tabs are full width.
-import type { Action, AppState, DocPut, Library, LogLine, Settings } from '../shared/types';
+import type { Action, AppState, DocPut, Library, LogLine, Settings, UpdateState } from '../shared/types';
 import { buildInfo } from './info';
 import { buildInspector } from './inspector';
 import { button, confirmSheet, h, icon, iconButton, popover, segmented, textField, toggle } from './kit';
@@ -47,7 +47,24 @@ function topBar(): HTMLElement {
   nav = segmented([{ value: 'edit', label: 'Edit' }, { value: 'show', label: 'Show' }, { value: 'channels', label: 'Channels' }, { value: 'activity', label: 'Activity' }], tab, (v) => showTab(v as Tab));
   const settings = h('button.btn.pill.settings-btn', icon('gear'), h('span', 'Settings')) as HTMLButtonElement;
   settings.addEventListener('click', openSettings);
-  return h('header.topbar', h('div.left', h('span.app-title', 'CasparCG Advanced Client')), h('div.center', nav.el), h('div.right', settings));
+  return h('header.topbar', h('div.left', h('span.app-title', 'CasparCG Advanced Client')), h('div.center', nav.el), h('div.right', updateBtn, settings));
+}
+
+// ---- updates (in the app only) ------------------------------------------------------------------------------
+const updateBtn = h('button.btn.pill', { title: 'A new version is ready to install' }, icon('download'), h('span', 'Update')) as HTMLButtonElement;
+updateBtn.hidden = true;
+updateBtn.addEventListener('click', () => void call('updateAsk'));
+let ready = '';
+function gotUpdate(u: UpdateState): void {
+  updateBtn.hidden = !u.ready;
+  if (u.ready && u.ready !== ready) toast(`Version ${u.ready} is ready${store.settings.autoUpdate ? '. It is installed when you quit' : ''}`);
+  ready = u.ready;
+}
+async function askUpdate(playing: string[]): Promise<void> {
+  if (!ready || document.querySelector('.sheet-layer')) return;
+  const air = playing.length ? ` ${playing.join(', ')} ${playing.length > 1 ? 'are' : 'is'} playing: the clip on air and the one already queued carry on, but nothing after them until the app is back.` : ' Anything on air carries on.';
+  const later = store.settings.autoUpdate ? ' If you cancel, it is installed when you quit.' : '';
+  if (await confirmSheet(`Update to version ${ready}?`, `The app closes, updates and opens again, which takes about 10 seconds.${air}${later}`, 'Update', playing.length > 0)) await call('updateInstall');
 }
 
 /** In a browser the settings open over the page; in the app they have their own window. */
@@ -228,6 +245,11 @@ async function start(): Promise<void> {
     else if (v === 'playandautostep' || v === 'playnowandautostep') void execute(v.startsWith('playnow') ? 'playNow' : 'play').then(() => moveSelection(1));
     else if (REMOTE[v]) void execute(REMOTE[v]);
   }) as never);
+  vt.on('askupdate', ((playing: string[]) => void askUpdate(playing)) as never);
+  if (!vt.web) {
+    vt.on('update', gotUpdate as never);
+    void call<UpdateState>('update').then((u) => u && gotUpdate(u));
+  }
   vt.on('askquit', ((playing: string[]) => void askQuit(playing)) as never);
   document.addEventListener('keydown', keys);
   document.addEventListener('dragover', (e) => e.preventDefault());

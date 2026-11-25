@@ -1,7 +1,8 @@
-# Builds the Windows exes and adds them to the GitHub Release whenever a version is cut (a v*.*.* tag, pushed or made
-# by creating a release on GitHub). Cut a version with:
+# Builds the Windows installer, and the files installed copies update themselves from, and adds them to the GitHub
+# Release whenever a version is cut (a v*.*.* tag, pushed or made by creating a release on GitHub). Cut a version with:
 #   npm version <patch|minor|major|x.y.z> && git push --follow-tags
-# Run by hand without a tag for a trial build: the exes are kept on the run and nothing is released.
+# Every installed copy then updates to it, unless it is a pre-release (v1.2.3-beta.1).
+# Run by hand without a tag for a trial build: the installer is kept on the run and nothing is released.
 name: Release
 
 on:
@@ -47,7 +48,7 @@ jobs:
       - run: npm run typecheck
       - run: node test/unit.mjs
 
-      - name: Build exes
+      - name: Build the installer
         run: npm run dist
 
       - name: Check the built app starts
@@ -77,6 +78,7 @@ jobs:
           path: release/*.exe
           retention-days: 7
 
+      # latest.yml goes last: the app looks for updates in it. The .blockmap lets it download only what changed.
       - name: Publish to the GitHub Release
         if: env.TAG != ''
         shell: bash
@@ -84,8 +86,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          files=(release/CasparCG-Advanced-Client-Setup.exe release/CasparCG-Advanced-Client-Setup.exe.blockmap)
+          pre=() feed=(release/latest.yml)
+          if [[ "$TAG" == *-* ]]; then pre=(--prerelease) feed=(); fi
+          ls -l "${files[@]}" "${feed[@]}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release/*.exe --clobber
+            gh release upload "$TAG" "${files[@]}" --clobber
+            for f in "${feed[@]}"; do gh release upload "$TAG" "$f" --clobber; done
           else
-            gh release create "$TAG" release/*.exe --verify-tag --title "CasparCG Advanced Client $TAG" --generate-notes
+            gh release create "$TAG" "${files[@]}" "${feed[@]}" "${pre[@]}" --verify-tag --title "CasparCG Advanced Client $TAG" --generate-notes
           fi
