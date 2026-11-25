@@ -39,7 +39,7 @@ export class Device extends EventEmitter {
         decode(b, (a, v) => {
           const ch = /^\/channel\/(\d+)\//.exec(a)?.[1];
           if (ch) this.beat.set(ch, t);
-          if (a.includes('/stage/layer/') || a.endsWith('/mixer/audio/volume') || a.endsWith('/framerate')) this.osc.set(a, { v, t });
+          if (a.includes('/stage/layer/') || a.endsWith('/mixer/audio/volume') || a.endsWith('/framerate') || /\/output\/port\/\d+\/consumer$/.test(a)) this.osc.set(a, { v, t });
         });
       } catch { /* a malformed packet is not worth dropping the feed for */ }
     });
@@ -216,13 +216,25 @@ export class Device extends EventEmitter {
     return out;
   }
 
+  /**
+   * Sound levels of the channels that are reporting. Empty for a channel with no output: from 2.5 the server doesn't mix
+   * those, and goes on sending the last level it had.
+   */
   audio(): Map<number, number[]> {
     const out = new Map<number, number[]>();
     const now = Date.now();
+    const [major, minor] = this.version.split('.').map((x) => parseInt(x, 10));
+    const skips = major > 2 || (major === 2 && minor >= 5);
+    const ports = new Set<number>();
     for (const [a, r] of this.osc) {
-      const m = /^\/channel\/(\d+)\/mixer\/audio\/volume$/.exec(a);
-      if (m && now - r.t < 500) out.set(Number(m[1]), r.v.slice(0, 8).map((x) => Math.min(1, Math.abs(Number(x)) / 2147483647)));
+      const m = /^\/channel\/(\d+)\/(?:mixer\/audio\/volume|(output)\/port\/\d+\/consumer)$/.exec(a);
+      if (!m) continue;
+      const beat = this.beat.get(m[1]) ?? 0;
+      if (beat - r.t > STALE || now - beat > 1500) continue;
+      if (m[2]) ports.add(Number(m[1]));
+      else out.set(Number(m[1]), r.v.slice(0, 8).map((x) => Math.min(1, Math.abs(Number(x)) / 2147483647)));
     }
+    if (skips) for (const [c, t] of this.beat) if (now - t <= 1500 && !ports.has(Number(c))) out.set(Number(c), []);
     return out;
   }
 

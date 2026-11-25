@@ -83,7 +83,7 @@ export function buildChannels(): HTMLElement {
   const body = h('div.ch-body');
   let rows: Row[] = [];
   let sig = '';
-  const meters = new Map<string, HTMLElement[]>();
+  const meters = new Map<string, { bars: HTMLElement[]; el: HTMLElement; none: HTMLElement }>();
   let overlays: { device: string; ch: number; dot: HTMLElement; el: HTMLElement; again?: HTMLElement; was: string }[] = [];
   const act = (l: Loc, v: string) => void call('transport', l, v);
 
@@ -114,7 +114,9 @@ export function buildChannels(): HTMLElement {
       d.channels.forEach((fmt, k) => {
         const ch = k + 1;
         const bars = [...Array(8)].map(() => h('i'));
-        meters.set(`${d.name}|${ch}`, bars);
+        const meter = h('div.ch-meter', ...bars.map((b) => h('div.meter-v', b)));
+        const none = h('span.caption', { title: 'The server only mixes the sound of channels that have an output', hidden: true }, 'No output');
+        meters.set(`${d.name}|${ch}`, { bars, el: meter, none });
         const layers = Object.keys(st.layers).filter((x) => x.startsWith(`${d.name}|${ch}-`) && st.layers[x].producer !== 'empty').map((x) => Number(x.split('-').pop())).sort((a, b) => a - b);
         const clear = button('Clear channel', () => void confirmSheet(`Clear channel ${channelText(ch, d.name)}?`, 'Everything on it goes off air.', 'Clear', true).then((y) => { if (y) void call('clearChannel', d.name, ch); }), 'sm');
         const name = h('input.ch-name', { type: 'text', placeholder: 'Name', title: 'Name of this channel', maxLength: 40, spellcheck: false }) as HTMLInputElement;
@@ -127,7 +129,7 @@ export function buildChannels(): HTMLElement {
         overlays.push({ device: d.name, ch, dot, el: over, was: '' });
         const again = button('Show again', () => void call('channel', d.name, ch, { overlay: { on: true } }), 'sm');
         overlays.at(-1)!.again = again;
-        const card = h('div.ch-card', h('div.ch-head', h('b', `Channel ${ch}`), name, h('span.caption', fmt), h('div.ch-meter', ...bars.map((b) => h('div.meter-v', b))), h('span.spacer'), again, over, clear));
+        const card = h('div.ch-card', h('div.ch-head', h('b', `Channel ${ch}`), name, h('span.caption', fmt), meter, none, h('span.spacer'), again, over, clear));
         for (const l of layers) {
           const r = row({ device: d.name, channel: ch, layer: l });
           rows.push(r);
@@ -157,8 +159,10 @@ export function buildChannels(): HTMLElement {
       x.el.title = { off: 'Draw the clip and the time left over the picture of this channel', on: 'The playback overlay is over the picture of this channel', gone: 'The playback overlay was cleared' }[w];
       if (x.again) x.again.hidden = w !== 'gone';
     }
-    for (const [k, bars] of meters) {
+    for (const [k, { bars, el, none }] of meters) {
       const v = st.audio[k] ?? [];
+      const off = !!st.audio[k] && !v.length;
+      if (none.hidden === off) { none.hidden = !off; el.hidden = off; }
       bars.forEach((b, n) => { const x = v[n] ?? 0; b.style.height = `${x > 0 ? Math.max(0, Math.min(100, (20 * Math.log10(x) + 60) / 0.6)) : 0}%`; });
     }
     for (const r of rows) {
